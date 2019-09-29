@@ -495,7 +495,15 @@ static struct platform_driver kirkwood_pinctrl_driver = {
 	.remove = kirkwood_pinctrl_remove,
 };
 
+#ifdef CONFIG_FBXGW_COMMON
+int kirkwood_pinctrl_driver_init(void)
+{
+	return platform_driver_register(&kirkwood_pinctrl_driver);
+}
+EXPORT_SYMBOL(kirkwood_pinctrl_driver_init);
+#else
 module_platform_driver(kirkwood_pinctrl_driver);
+#endif
 
 MODULE_AUTHOR("Sebastian Hesselbarth <sebastian.hesselbarth@gmail.com>");
 MODULE_DESCRIPTION("Marvell Kirkwood pinctrl driver");

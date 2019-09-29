@@ -288,7 +288,7 @@ repeat:
 	}
 	return NF_ACCEPT;
 }
-
+EXPORT_SYMBOL(nf_iterate);
 
 /* Returns 1 if okfn() needs to be executed by the caller,
  * -EPERM for NF_DROP, 0 otherwise. */

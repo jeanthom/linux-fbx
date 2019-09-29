@@ -379,6 +379,37 @@ out_free_pages:
 	return error;
 }
 
+#ifdef CONFIG_MIPS
+static void cache_flush_buf_page(xfs_buf_t *bp, int page_id)
+{
+	struct page *page;
+	void *vmaddr, *addr;
+
+	if (!xfs_buf_is_vmapped(bp))
+		return;
+
+	page = bp->b_pages[page_id];
+	vmaddr = bp->b_addr - bp->b_offset + (page_id * PAGE_CACHE_SIZE);
+	addr = page_address(page);
+
+	if (pages_do_alias((unsigned long)addr, (unsigned long)vmaddr)) {
+		local_flush_data_cache_page(vmaddr);
+		local_flush_data_cache_page(addr);
+	}
+}
+
+static void cache_flush_buf(xfs_buf_t *bp)
+{
+	unsigned int i;
+
+	for (i = 0; i < bp->b_page_count; i++)
+		cache_flush_buf_page(bp, i);
+}
+#else
+static inline void cache_flush_buf_page(xfs_buf_t *bp, int page_id) { }
+static inline void cache_flush_buf(xfs_buf_t *bp) { }
+#endif
+
 /*
  *	Map buffer into kernel address-space if necessary.
  */
@@ -418,6 +449,7 @@ _xfs_buf_map_pages(
 		if (!bp->b_addr)
 			return -ENOMEM;
 		bp->b_addr += bp->b_offset;
+		cache_flush_buf(bp);
 	}
 
 	return 0;
@@ -1181,6 +1213,7 @@ next_chunk:
 		if (nbytes > size)
 			nbytes = size;
 
+		cache_flush_buf_page(bp, page_index);
 		rbytes = bio_add_page(bio, bp->b_pages[page_index], nbytes,
 				      offset);
 		if (rbytes < nbytes)

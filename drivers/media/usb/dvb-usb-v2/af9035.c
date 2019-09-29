@@ -741,6 +741,8 @@ static int af9035_download_firmware(struct dvb_usb_device *d,
 	if (ret < 0)
 		goto err;
 
+	msleep(30);
+
 	/* firmware loaded, request boot */
 	req.cmd = CMD_FW_BOOT;
 	ret = af9035_ctrl_msg(d, &req);
@@ -758,6 +760,15 @@ static int af9035_download_firmware(struct dvb_usb_device *d,
 				KBUILD_MODNAME);
 		ret = -ENODEV;
 		goto err;
+	}
+
+	/* tuner RF initial */
+	if (state->chip_type == 0x9135) {
+		ret = af9035_wr_reg(d, 0x80ec4c, 0x68);
+		if (ret < 0)
+			goto err;
+
+		msleep(30);
 	}
 
 	dev_info(&d->udev->dev, "%s: firmware version=%d.%d.%d.%d",

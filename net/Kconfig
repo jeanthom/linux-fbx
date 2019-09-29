@@ -50,6 +50,18 @@ config NET_INGRESS
 
 menu "Networking options"
 
+config NETSKBPAD
+	int "Size reserved by dev_alloc_skb"
+	default 16
+
+config NETRXTHREAD
+	bool "Do rx network processing in kernel thread"
+
+config NETRXTHREAD_RX_QUEUE
+	int "Number of rx queues"
+	default 1
+	depends on NETRXTHREAD
+
 source "net/packet/Kconfig"
 source "net/unix/Kconfig"
 source "net/xfrm/Kconfig"
@@ -208,6 +220,8 @@ source "net/rds/Kconfig"
 source "net/tipc/Kconfig"
 source "net/atm/Kconfig"
 source "net/l2tp/Kconfig"
+source "net/fbxatm/Kconfig"
+source "net/fbxbridge/Kconfig"
 source "net/802/Kconfig"
 source "net/bridge/Kconfig"
 source "net/dsa/Kconfig"

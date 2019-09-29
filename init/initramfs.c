@@ -628,7 +628,18 @@ static int __init populate_rootfs(void)
 		fd = sys_open("/initrd.image",
 			      O_WRONLY|O_CREAT, 0700);
 		if (fd >= 0) {
-			ssize_t written = xwrite(fd, (char *)initrd_start,
+			ssize_t written;
+#ifdef CONFIG_FBX_DECRYPT_INITRD
+			int err;
+			extern int fbx_decrypt_initrd(char *start,
+						      u32 size);
+
+			err = fbx_decrypt_initrd((char*)initrd_start,
+						 initrd_end - initrd_start);
+			if (err)
+				printk(KERN_ERR "Decrypt failed: %i\n", err);
+#endif
+			written = xwrite(fd, (char *)initrd_start,
 						initrd_end - initrd_start);
 
 			if (written != initrd_end - initrd_start)

@@ -137,6 +137,7 @@
 #include <linux/errqueue.h>
 #include <linux/hrtimer.h>
 #include <linux/netfilter_ingress.h>
+#include <linux/kthread.h>
 
 #include "net-sysfs.h"
 
@@ -156,6 +157,10 @@ static int netif_rx_internal(struct sk_buff *skb);
 static int call_netdevice_notifiers_info(unsigned long val,
 					 struct net_device *dev,
 					 struct netdev_notifier_info *info);
+
+#ifdef CONFIG_NETRXTHREAD
+struct krxd gkrxd[CONFIG_NETRXTHREAD_RX_QUEUE];
+#endif
 
 /*
  * The @dev_base_head list is protected by @dev_base_lock and the rtnl
@@ -3640,6 +3645,23 @@ static int netif_rx_internal(struct sk_buff *skb)
 	return ret;
 }
 
+/* Start Freebox added code */
+#if defined(CONFIG_FREEBOX_DIVERTER) || defined(CONFIG_FREEBOX_DIVERTER_MODULE)
+int (*fbxdiverter_hook)(struct sk_buff *);
+
+static int handle_fbxdiverter(struct sk_buff *skb)
+{
+	/* try_module_get is missing here, so there is a race on
+	 * fbxdiverter module deletion */
+	if (!fbxdiverter_hook)
+		return 0;
+	return fbxdiverter_hook(skb);
+}
+
+EXPORT_SYMBOL(fbxdiverter_hook);
+#endif
+
+
 /**
  *	netif_rx	-	post buffer to the network code
  *	@skb: buffer to post
@@ -3746,6 +3768,36 @@ static void net_tx_action(struct softirq_action *h)
 int (*br_fdb_test_addr_hook)(struct net_device *dev,
 			     unsigned char *addr) __read_mostly;
 EXPORT_SYMBOL_GPL(br_fdb_test_addr_hook);
+#endif
+
+#ifdef CONFIG_FBXBRIDGE
+struct sk_buff *(*fbxbridge_handle_frame_hook)(struct fbxbridge *p, struct sk_buff *skb);
+
+struct fbxbridge;
+
+static inline struct sk_buff *handle_fbxbridge(struct sk_buff *skb,
+					       struct packet_type **pt_prev, int *ret,
+					       struct net_device *orig_dev)
+{
+	struct fbxbridge *fbxbr;
+
+	if (skb->pkt_type == PACKET_LOOPBACK ||
+	    (fbxbr = skb->dev->fbx_bridge_port) == NULL)
+		return skb;
+
+	if (skb->protocol != __constant_htons(ETH_P_IP) &&
+	    skb->protocol != __constant_htons(ETH_P_ARP))
+		return skb;
+
+	if (*pt_prev) {
+		*ret = deliver_skb(skb, *pt_prev, orig_dev);
+		*pt_prev = NULL;
+	}
+
+	return fbxbridge_handle_frame_hook(fbxbr, skb);
+}
+#else
+#define handle_fbxbridge(skb, pt_prev, ret, orig_dev)   (skb)
 #endif
 
 static inline struct sk_buff *handle_ing(struct sk_buff *skb,
@@ -3910,17 +3962,7 @@ static int __netif_receive_skb_core(struct sk_buff *skb, bool pfmemalloc)
 	int ret = NET_RX_DROP;
 	__be16 type;
 
-	net_timestamp_check(!netdev_tstamp_prequeue, skb);
-
-	trace_netif_receive_skb(skb);
-
 	orig_dev = skb->dev;
-
-	skb_reset_network_header(skb);
-	if (!skb_transport_header_was_set(skb))
-		skb_reset_transport_header(skb);
-	skb_reset_mac_len(skb);
-
 	pt_prev = NULL;
 
 another_round:
@@ -3958,6 +4000,9 @@ another_round:
 	}
 
 skip_taps:
+	skb = handle_fbxbridge(skb, &pt_prev, &ret, orig_dev);
+	if (!skb)
+		goto out;
 #ifdef CONFIG_NET_INGRESS
 	if (static_key_false(&ingress_needed)) {
 		skb = handle_ing(skb, &pt_prev, &ret, orig_dev);
@@ -4053,7 +4098,9 @@ out:
 	return ret;
 }
 
-static int __netif_receive_skb(struct sk_buff *skb)
+static int __netif_receive_skb(struct sk_buff *skb);
+
+static int __netif_receive_skb_end(struct sk_buff *skb)
 {
 	int ret;
 
@@ -4104,6 +4151,88 @@ static int netif_receive_skb_internal(struct sk_buff *skb)
 	ret = __netif_receive_skb(skb);
 	rcu_read_unlock();
 	return ret;
+}
+
+#ifdef CONFIG_NETRXTHREAD
+
+static int krxd_action(void *data)
+{
+	struct krxd *krxd = (struct krxd *)data;
+	unsigned int queue = krxd - gkrxd;
+	struct sk_buff *skb;
+
+	set_user_nice(current, queue > 0 ? -10 : -5);
+	current->flags |= PF_NOFREEZE;
+	__set_current_state(TASK_RUNNING);
+
+	local_bh_disable();
+	while (1) {
+		skb = skb_dequeue(&krxd->pkt_queue);
+		if (!skb) {
+			local_bh_enable();
+			wait_event_interruptible(krxd->wq,
+					 skb_queue_len(&krxd->pkt_queue));
+			set_current_state(TASK_RUNNING);
+			local_bh_disable();
+			continue;
+		}
+
+		__netif_receive_skb_end(skb);
+
+		/* only schedule when working on lowest prio queue */
+		if (queue == 0) {
+			if (need_resched()) {
+				local_bh_enable();
+				schedule();
+				local_bh_disable();
+			}
+		}
+	}
+	return 0;
+}
+#endif /* RXTHREAD */
+
+static int __netif_receive_skb(struct sk_buff *skb)
+{
+#ifdef CONFIG_NETRXTHREAD
+	unsigned int len;
+	struct krxd *krxd;
+#endif
+	net_timestamp_check(!netdev_tstamp_prequeue, skb);
+
+	trace_netif_receive_skb(skb);
+
+	skb_reset_network_header(skb);
+	if (!skb_transport_header_was_set(skb))
+		skb_reset_transport_header(skb);
+	skb_reset_mac_len(skb);
+
+#if defined(CONFIG_FREEBOX_DIVERTER) || defined(CONFIG_FREEBOX_DIVERTER_MODULE)
+	if (handle_fbxdiverter(skb))
+		return NET_RX_SUCCESS;
+#endif
+
+#ifndef CONFIG_NETRXTHREAD
+	return __netif_receive_skb_end(skb);
+#else
+	BUILD_BUG_ON(ARRAY_SIZE(gkrxd) < 2);
+	krxd = &gkrxd[skb->rxthread_prio & 1];
+
+	/* queue the packet to the rx thread */
+	local_bh_disable();
+	len = skb_queue_len(&krxd->pkt_queue);
+	if (len < RXTHREAD_MAX_PKTS) {
+		__skb_queue_tail(&krxd->pkt_queue, skb);
+		krxd->stats_pkts++;
+		if (!len)
+			wake_up(&krxd->wq);
+	} else {
+		krxd->stats_dropped++;
+		dev_kfree_skb(skb);
+	}
+	local_bh_enable();
+	return NET_RX_SUCCESS;
+#endif
 }
 
 /**
@@ -6984,7 +7113,7 @@ static void netdev_wait_allrefs(struct net_device *dev)
 			rebroadcast_time = jiffies;
 		}
 
-		msleep(250);
+		msleep(1);
 
 		refcnt = netdev_refcnt_read(dev);
 
@@ -7923,6 +8052,23 @@ static int __init net_dev_init(void)
 	open_softirq(NET_TX_SOFTIRQ, net_tx_action);
 	open_softirq(NET_RX_SOFTIRQ, net_rx_action);
 
+#ifdef CONFIG_NETRXTHREAD
+	for (i = 0; i < CONFIG_NETRXTHREAD_RX_QUEUE; i++) {
+		struct krxd *krxd = &gkrxd[i];
+		struct task_struct *task;
+
+		skb_queue_head_init(&krxd->pkt_queue);
+		init_waitqueue_head(&krxd->wq);
+		task = kthread_create(krxd_action, krxd, "krxthread_%u", i);
+		if (IS_ERR(task)) {
+			printk(KERN_ERR "unable to create krxd\n");
+			return -ENOMEM;
+		}
+		krxd->task = task;
+		wake_up_process(task);
+	}
+#endif
+
 	hotcpu_notifier(dev_cpu_callback, 0);
 	dst_subsys_init();
 	rc = 0;
@@ -7931,3 +8077,7 @@ out:
 }
 
 subsys_initcall(net_dev_init);
+
+#if defined(CONFIG_FBXBRIDGE_MODULE)
+EXPORT_SYMBOL(fbxbridge_handle_frame_hook);
+#endif

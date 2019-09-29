@@ -780,6 +780,10 @@ static void __copy_skb_header(struct sk_buff *new, const struct sk_buff *old)
 	memcpy(&new->headers_start, &old->headers_start,
 	       offsetof(struct sk_buff, headers_end) -
 	       offsetof(struct sk_buff, headers_start));
+
+#ifdef CONFIG_IP_FFN
+	new->ffn_state		= FFN_STATE_INIT;
+#endif
 	CHECK_SKB_FIELD(protocol);
 	CHECK_SKB_FIELD(csum);
 	CHECK_SKB_FIELD(hash);
@@ -830,6 +834,9 @@ static struct sk_buff *__skb_clone(struct sk_buff *n, struct sk_buff *skb)
 	C(mac_len);
 	n->hdr_len = skb->nohdr ? skb_headroom(skb) : skb->hdr_len;
 	n->cloned = 1;
+#ifdef CONFIG_FBXBRIDGE
+	n->fbxbridge_state = 0;
+#endif
 	n->nohdr = 0;
 	n->peeked = 0;
 	C(pfmemalloc);
@@ -1189,6 +1196,9 @@ int pskb_expand_head(struct sk_buff *skb, int nhead, int ntail,
 	skb->cloned   = 0;
 	skb->hdr_len  = 0;
 	skb->nohdr    = 0;
+#ifdef CONFIG_FBXBRIDGE
+	skb->fbxbridge_state = 0;
+#endif
 	atomic_set(&skb_shinfo(skb)->dataref, 1);
 	return 0;
 
@@ -1658,6 +1668,10 @@ pull_pages:
 
 	skb->tail     += delta;
 	skb->data_len -= delta;
+
+#ifdef CONFIG_FBXBRIDGE
+	skb->fbxbridge_state = 0;
+#endif
 
 	return skb_tail_pointer(skb);
 }

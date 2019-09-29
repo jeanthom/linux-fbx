@@ -10,6 +10,7 @@
 #include <linux/of_net.h>
 #include <linux/phy.h>
 #include <linux/export.h>
+#include <linux/fbxserial.h>
 
 /**
  * of_get_phy_mode - Get phy mode for given device_node
@@ -68,6 +69,13 @@ static const void *of_get_mac_addr(struct device_node *np, const char *name)
 const void *of_get_mac_address(struct device_node *np)
 {
 	const void *addr;
+#ifdef CONFIG_FBXSERIAL
+	struct property *pp;
+
+	pp = of_find_property(np, "fbxserial-mac-address", NULL);
+	if (pp && pp->length == 4)
+		return fbxserialinfo_get_mac_addr(be32_to_cpu(*(u32*)pp->value));
+#endif
 
 	addr = of_get_mac_addr(np, "mac-address");
 	if (addr)

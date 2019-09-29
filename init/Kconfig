@@ -866,6 +866,15 @@ config LOG_CPU_MAX_BUF_SHIFT
 		     13 =>   8 KB for each CPU
 		     12 =>   4 KB for each CPU
 
+config FBX_DECRYPT_INITRD
+	bool "Decrypt initrd at boot"
+	depends on BLK_DEV_RAM
+	default n
+
+config FBX_DECRYPT_INITRD_KEY
+	string "Decryption key"
+	depends on FBX_DECRYPT_INITRD
+
 #
 # Architectures with an unreliable sched_clock() should select this:
 #
@@ -1368,7 +1377,6 @@ config BPF
 menuconfig EXPERT
 	bool "Configure standard kernel features (expert users)"
 	# Unhide debug options, to make the on-by-default options visible
-	select DEBUG_KERNEL
 	help
 	  This option allows certain base kernel options and settings
           to be disabled or tweaked. This is for specialized

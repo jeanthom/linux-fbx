@@ -391,6 +391,11 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 
 	account_kernel_stack(ti, 1);
 
+	/*
+	 * inherit parent exec_mode.
+	 */
+	tsk->exec_mode = orig->exec_mode;
+
 	return tsk;
 
 free_ti:

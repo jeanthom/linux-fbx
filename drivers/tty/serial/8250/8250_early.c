@@ -128,8 +128,12 @@ static void __init init_port(struct earlycon_device *device)
 	divisor = DIV_ROUND_CLOSEST(port->uartclk, 16 * device->baud);
 	c = serial8250_early_in(port, UART_LCR);
 	serial8250_early_out(port, UART_LCR, c | UART_LCR_DLAB);
+#ifdef CONFIG_TANGO2
+	serial8250_early_out(port, UART_DL, divisor & 0xffff);
+#else
 	serial8250_early_out(port, UART_DLL, divisor & 0xff);
 	serial8250_early_out(port, UART_DLM, (divisor >> 8) & 0xff);
+#endif
 	serial8250_early_out(port, UART_LCR, c & ~UART_LCR_DLAB);
 }
 

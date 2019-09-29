@@ -33,6 +33,9 @@ config ATH_TRACEPOINTS
          This option enables tracepoints for atheros wireless drivers.
 	 Currently, ath9k makes use of this facility.
 
+config ATH_REG_IGNORE
+	bool "ignore all eeprom regulation"
+
 config ATH_REG_DYNAMIC_USER_REG_HINTS
 	bool "Atheros dynamic user regulatory hints"
 	depends on CFG80211_CERTIFICATION_ONUS

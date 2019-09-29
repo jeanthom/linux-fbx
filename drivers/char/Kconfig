@@ -24,6 +24,15 @@ config DEVKMEM
 	  kind of kernel debugging operations.
 	  When in doubt, say "N".
 
+config DEVPHYSMEM
+	bool "/dev/physmem virtual device support"
+	default n
+	help
+	  Say Y here if you want to support the /dev/physmem device. The
+	  /dev/physmem device allows unprivileged access to physical memory
+	  unused by the kernel.
+	  When in doubt, say "N".
+
 config SGI_SNSC
 	bool "SGI Altix system controller communication support"
 	depends on (IA64_SGI_SN2 || IA64_GENERIC)

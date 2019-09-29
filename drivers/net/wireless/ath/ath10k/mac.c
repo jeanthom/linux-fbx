@@ -7422,12 +7422,14 @@ int ath10k_mac_register(struct ath10k *ar)
 		goto err_dfs_detector_exit;
 	}
 
+#ifndef CONFIG_ATH_REG_IGNORE
 	if (!ath_is_world_regd(&ar->ath_common.regulatory)) {
 		ret = regulatory_hint(ar->hw->wiphy,
 				      ar->ath_common.regulatory.alpha2);
 		if (ret)
 			goto err_unregister;
 	}
+#endif
 
 	return 0;
 

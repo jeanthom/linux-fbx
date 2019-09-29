@@ -9,6 +9,7 @@ void convert_to_tag_list(struct tag *tags);
 #ifdef CONFIG_ATAGS
 const struct machine_desc *setup_machine_tags(phys_addr_t __atags_pointer,
 	unsigned int machine_nr);
+void freebox_atags_wa(unsigned int);
 #else
 static inline const struct machine_desc *
 setup_machine_tags(phys_addr_t __atags_pointer, unsigned int machine_nr)
@@ -17,4 +18,5 @@ setup_machine_tags(phys_addr_t __atags_pointer, unsigned int machine_nr)
 	while (true);
 	unreachable();
 }
+static inline void freebox_atags_wa(unsigned int) {}
 #endif

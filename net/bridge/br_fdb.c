@@ -480,6 +480,14 @@ static struct net_bridge_fdb_entry *fdb_find(struct hlist_head *head,
 	return NULL;
 }
 
+struct net_bridge_fdb_entry *br_fdb_find(struct net_bridge *br,
+					 const unsigned char *addr,
+					 __u16 vid)
+{
+        struct hlist_head *head = &br->hash[br_mac_hash(addr, vid)];
+	return fdb_find(head, addr, vid);
+}
+
 static struct net_bridge_fdb_entry *fdb_find_rcu(struct hlist_head *head,
 						 const unsigned char *addr,
 						 __u16 vid)
@@ -559,6 +567,21 @@ int br_fdb_insert(struct net_bridge *br, struct net_bridge_port *source,
 	ret = fdb_insert(br, source, addr, vid);
 	spin_unlock_bh(&br->hash_lock);
 	return ret;
+}
+
+bool br_fdb_update_only(struct net_bridge *br,
+			struct net_bridge_port *source,
+			const unsigned char *addr)
+{
+	struct net_bridge_fdb_entry *fdb;
+	struct hlist_head *head = &br->hash[br_mac_hash(addr, 0)];
+
+	fdb = fdb_find(head, addr, 0);
+	if (!fdb)
+		return false;
+
+	fdb->updated = jiffies;
+	return true;
 }
 
 void br_fdb_update(struct net_bridge *br, struct net_bridge_port *source,

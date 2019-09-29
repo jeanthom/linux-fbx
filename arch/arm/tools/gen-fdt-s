@@ -1,0 +1,14 @@
+#!/bin/sh
+
+machtype_up=$1
+machtype_low=$(echo $machtype_up | tr '[:upper:]' '[:lower:]')
+
+cat <<EOF
+	.section .rodata.fdt, "a"
+	.global __fdt_start_$machtype_up
+	.global __fdt_end_$machtype_up
+	.align 4
+__fdt_start_$machtype_up:
+	.incbin "arch/arm/boot/dts/$machtype_low.dtb"
+__fdt_end_$machtype_up:
+EOF

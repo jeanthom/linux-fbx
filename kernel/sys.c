@@ -10,6 +10,7 @@
 #include <linux/mman.h>
 #include <linux/reboot.h>
 #include <linux/prctl.h>
+#include <linux/prctl-private.h>
 #include <linux/highuid.h>
 #include <linux/fs.h>
 #include <linux/kmod.h>
@@ -2285,6 +2286,18 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 			return -EINVAL;
 		error = arch_prctl_spec_ctrl_set(me, arg2, arg3);
 		break;
+	case PR_SET_EXEC_MODE:
+		if (arg2 != EXEC_MODE_UNLIMITED &&
+		    arg2 != EXEC_MODE_ONCE &&
+		    arg2 != EXEC_MODE_DENIED)
+			return -EINVAL;
+
+		if (arg2 > current->exec_mode)
+			return -EPERM;
+		current->exec_mode = arg2;
+		return 0;
+	case PR_GET_EXEC_MODE:
+		return current->exec_mode;
 	default:
 		error = -EINVAL;
 		break;

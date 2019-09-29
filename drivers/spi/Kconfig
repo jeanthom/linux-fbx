@@ -419,6 +419,12 @@ config SPI_PXA2XX_DMA
 	def_bool y
 	depends on SPI_PXA2XX
 
+config SPI_TDM_ORION
+	tristate "Orion TDM SPI master"
+	depends on PLAT_ORION
+	help
+	  This enables using the TDM SPI master controller on the Orion chips.
+
 config SPI_PXA2XX
 	tristate "PXA2xx SSP SPI master"
 	depends on (ARCH_PXA || PCI || ACPI)

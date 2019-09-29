@@ -50,4 +50,15 @@ if FB || SGI_NEWPORT_CONSOLE
 endif
 
 
+config FB_SSD1327
+	tristate "SSD1327 OLED driver"
+	depends on FB
+	select FB_SYS_FILLRECT
+	select FB_SYS_COPYAREA
+	select FB_SYS_IMAGEBLIT
+	select FB_SYS_FOPS
+	select FB_BACKLIGHT
+	select SPI
+	default n
+
 endmenu

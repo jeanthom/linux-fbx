@@ -1757,6 +1757,10 @@ config SENSORS_ULTRA45
 	  This driver provides support for the Ultra45 workstation environmental
 	  sensors.
 
+config SENSORS_KIRKWOOD_CORETEMP
+	tristate "Kirkwood core temperature censor"
+	depends on MACH_KIRKWOOD
+
 if ACPI
 
 comment "ACPI drivers"

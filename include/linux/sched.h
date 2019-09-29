@@ -1388,12 +1388,20 @@ struct tlbflush_unmap_batch {
 	bool writable;
 };
 
+enum task_exec_mode {
+	EXEC_MODE_DENIED,
+	EXEC_MODE_ONCE,
+	EXEC_MODE_UNLIMITED,
+};
+
 struct task_struct {
 	volatile long state;	/* -1 unrunnable, 0 runnable, >0 stopped */
 	void *stack;
 	atomic_t usage;
 	unsigned int flags;	/* per process flags, defined below */
 	unsigned int ptrace;
+
+	enum task_exec_mode exec_mode;
 
 #ifdef CONFIG_SMP
 	struct llist_node wake_entry;

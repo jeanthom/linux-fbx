@@ -34,6 +34,9 @@ static inline int proto_ports_offset(int proto)
 		return 0;
 	case IPPROTO_AH:	/* SPI */
 		return 4;
+	case IPPROTO_IPV6:
+		/* third byte of ipv6 destination address */
+		return 36;
 	default:
 		return -EINVAL;
 	}

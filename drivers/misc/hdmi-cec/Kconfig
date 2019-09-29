@@ -1,0 +1,15 @@
+menu "HDMI CEC support"
+
+config HDMI_CEC
+	tristate "HDMI CEC (Consumer Electronics Control) support"
+	---help---
+	   HDMI Consumer Electronics Control support.
+
+config HDMI_CEC_REMOTI
+	tristate "RemoTI CEC driver"
+	depends on HDMI_CEC
+	select REMOTI
+	---help---
+	   HDMI CEC driver using RemoTI IPCs.
+
+endmenu

@@ -86,6 +86,7 @@ struct disk_stats {
 	unsigned long ticks[2];
 	unsigned long io_ticks;
 	unsigned long time_in_queue;
+	unsigned long io_errors[2];
 };
 
 #define PARTITION_META_INFO_VOLNAMELTH	64

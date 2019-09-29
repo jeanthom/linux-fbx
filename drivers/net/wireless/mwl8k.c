@@ -24,6 +24,7 @@
 #include <linux/moduleparam.h>
 #include <linux/firmware.h>
 #include <linux/workqueue.h>
+#include <linux/crc32.h>
 
 #define MWL8K_DESC	"Marvell TOPDOG(R) 802.11 Wireless Network Driver"
 #define MWL8K_NAME	KBUILD_MODNAME
@@ -34,6 +35,12 @@ static bool ap_mode_default;
 module_param(ap_mode_default, bool, 0);
 MODULE_PARM_DESC(ap_mode_default,
 		 "Set to 1 to make ap mode the default instead of sta mode");
+
+static u8 ap_base_mac_addr[18] = "00:00:00:00:00:00";
+module_param_string(base_mac_addr, ap_base_mac_addr, 18, 0);
+MODULE_PARM_DESC(ap_base_mac_addr,
+		  "Override EEPROM defined base mac address in AP mode");
+
 
 /* Register definitions */
 #define MWL8K_HIU_GEN_PTR			0x00000c10
@@ -300,6 +307,9 @@ struct mwl8k_priv {
 	struct ieee80211_channel *acs_chan;
 	unsigned long channel_time;
 	struct survey_info survey[MWL8K_NUM_CHANS];
+
+	unsigned int last_short_preamble;
+	unsigned int last_basic_rates;
 };
 
 #define MAX_WEP_KEY_LEN         13
@@ -327,6 +337,9 @@ struct mwl8k_vif {
 
 	/* A flag to indicate is HW crypto is enabled for this bssid */
 	bool is_hw_crypto_enabled;
+
+	u32 last_beacon_crc;
+	unsigned int last_beacon_int;
 };
 #define MWL8K_VIF(_vif) ((struct mwl8k_vif *)&((_vif)->drv_priv))
 #define IEEE80211_KEY_CONF(_u8) ((struct ieee80211_key_conf *)(_u8))
@@ -793,6 +806,11 @@ static int mwl8k_load_firmware(struct ieee80211_hw *hw)
 	return loops ? 0 : -ETIMEDOUT;
 }
 
+static bool disable_5g = 0;
+module_param(disable_5g, bool, 0);
+MODULE_PARM_DESC(disable_5g,
+		 "Set to 1 to disable 5G band usage");
+
 
 /* DMA header used by firmware and hardware.  */
 struct mwl8k_dma_data {
@@ -1008,6 +1026,9 @@ mwl8k_rxd_ap_process(void *_rxd, struct ieee80211_rx_status *status,
 			}
 		}
 	}
+
+	if (le16_to_cpu(rxd->htsig2) & (1 << 7))
+		status->flag |= RX_FLAG_SHORT_GI;
 
 	if (rxd->channel > 14) {
 		status->band = IEEE80211_BAND_5GHZ;
@@ -1651,6 +1672,8 @@ static int mwl8k_tid_queue_mapping(u8 tid)
  */
 
 #define RI_FORMAT(a)		  (a & 0x0001)
+#define RI_SHORT_GI(a)		 (a & 0x0002)
+#define RI_40MHZ(a)		 (a & 0x0004)
 #define RI_RATE_ID_MCS(a)	 ((a & 0x01f8) >> 3)
 
 static int
@@ -1708,6 +1731,8 @@ mwl8k_txq_reclaim(struct ieee80211_hw *hw, int index, int limit, int force)
 		tx_desc->pkt_len = 0;
 
 		info = IEEE80211_SKB_CB(skb);
+		rate_info = le16_to_cpu(tx_desc->rate_info);
+
 		if (ieee80211_is_data(wh->frame_control)) {
 			rcu_read_lock();
 			sta = ieee80211_find_sta_by_ifaddr(hw, wh->addr1,
@@ -1715,7 +1740,6 @@ mwl8k_txq_reclaim(struct ieee80211_hw *hw, int index, int limit, int force)
 			if (sta) {
 				sta_info = MWL8K_STA(sta);
 				BUG_ON(sta_info == NULL);
-				rate_info = le16_to_cpu(tx_desc->rate_info);
 				/* If rate is < 6.5 Mpbs for an ht station
 				 * do not form an ampdu. If the station is a
 				 * legacy station (format = 0), do not form an
@@ -1729,18 +1753,25 @@ mwl8k_txq_reclaim(struct ieee80211_hw *hw, int index, int limit, int force)
 				}
 			}
 			rcu_read_unlock();
-		}
+
+			info->status.rates[0].idx = RI_RATE_ID_MCS(rate_info);
+			info->status.rates[0].flags = 0;
+			if (RI_FORMAT(rate_info))
+				info->status.rates[0].flags |= IEEE80211_TX_RC_MCS;
+			if (RI_SHORT_GI(rate_info))
+				info->status.rates[0].flags |= IEEE80211_TX_RC_SHORT_GI;
+			if (RI_40MHZ(rate_info))
+				info->status.rates[0].flags |= IEEE80211_TX_RC_40_MHZ_WIDTH;
+			info->status.rates[1].idx = -1;
+		} else
+		info->status.rates[0].idx = -1;
 
 		ieee80211_tx_info_clear_status(info);
 
-		/* Rate control is happening in the firmware.
-		 * Ensure no tx rate is being reported.
-		 */
-		info->status.rates[0].idx = -1;
-		info->status.rates[0].count = 1;
-
 		if (MWL8K_TXD_SUCCESS(status))
 			info->flags |= IEEE80211_TX_STAT_ACK;
+		if (index >= MWL8K_TX_WMM_QUEUES)
+			info->flags |= IEEE80211_TX_STAT_AMPDU;
 
 		ieee80211_tx_status_irqsafe(hw, skb);
 
@@ -2429,7 +2460,7 @@ mwl8k_set_caps(struct ieee80211_hw *hw, u32 caps)
 			mwl8k_set_ht_caps(hw, &priv->band_24, caps);
 	}
 
-	if (caps & MWL8K_CAP_5GHZ) {
+	if (!disable_5g && (caps & MWL8K_CAP_5GHZ)) {
 		mwl8k_setup_5ghz_band(hw);
 		if (caps & MWL8K_CAP_MIMO)
 			mwl8k_set_ht_caps(hw, &priv->band_50, caps);
@@ -2524,6 +2555,7 @@ static int mwl8k_cmd_get_hw_spec_ap(struct ieee80211_hw *hw)
 
 	if (!rc) {
 		int off;
+		u8 ap_base_mac[ETH_ALEN];
 
 		api_version = le32_to_cpu(cmd->fw_api_version);
 		if (priv->device_info->fw_api_ap != api_version) {
@@ -2535,7 +2567,13 @@ static int mwl8k_cmd_get_hw_spec_ap(struct ieee80211_hw *hw)
 			rc = -EINVAL;
 			goto done;
 		}
+
+		if (mac_pton(ap_base_mac_addr, ap_base_mac) &&
+		    !is_zero_ether_addr(ap_base_mac))
+			SET_IEEE80211_PERM_ADDR(hw, ap_base_mac);
+		else
 		SET_IEEE80211_PERM_ADDR(hw, cmd->perm_addr);
+
 		priv->num_mcaddrs = le16_to_cpu(cmd->num_mcaddrs);
 		priv->fw_rev = le32_to_cpu(cmd->fw_rev);
 		priv->hw_rev = cmd->hw_rev;
@@ -4699,10 +4737,6 @@ static int mwl8k_start(struct ieee80211_hw *hw)
 	}
 	priv->irq = priv->pdev->irq;
 
-	/* Enable TX reclaim and RX tasklets.  */
-	tasklet_enable(&priv->poll_tx_task);
-	tasklet_enable(&priv->poll_rx_task);
-
 	/* Enable interrupts */
 	iowrite32(MWL8K_A2H_EVENTS, priv->regs + MWL8K_HIU_A2H_INTERRUPT_MASK);
 	iowrite32(MWL8K_A2H_EVENTS,
@@ -4737,11 +4771,14 @@ static int mwl8k_start(struct ieee80211_hw *hw)
 		iowrite32(0, priv->regs + MWL8K_HIU_A2H_INTERRUPT_MASK);
 		free_irq(priv->pdev->irq, hw);
 		priv->irq = -1;
-		tasklet_disable(&priv->poll_tx_task);
-		tasklet_disable(&priv->poll_rx_task);
+		tasklet_kill(&priv->poll_tx_task);
+		tasklet_kill(&priv->poll_rx_task);
 	} else {
 		ieee80211_wake_queues(hw);
 	}
+
+	priv->last_short_preamble = ~0;
+	priv->last_basic_rates = ~0;
 
 	return rc;
 }
@@ -4770,8 +4807,8 @@ static void mwl8k_stop(struct ieee80211_hw *hw)
 		dev_kfree_skb(priv->beacon_skb);
 
 	/* Stop TX reclaim and RX tasklets.  */
-	tasklet_disable(&priv->poll_tx_task);
-	tasklet_disable(&priv->poll_rx_task);
+	tasklet_kill(&priv->poll_tx_task);
+	tasklet_kill(&priv->poll_rx_task);
 
 	/* Return all skbs to mac80211 */
 	for (i = 0; i < mwl8k_tx_queues(priv); i++)
@@ -4846,6 +4883,8 @@ static int mwl8k_add_interface(struct ieee80211_hw *hw,
 	mwl8k_vif->seqno = 0;
 	memcpy(mwl8k_vif->bssid, vif->addr, ETH_ALEN);
 	mwl8k_vif->is_hw_crypto_enabled = false;
+	mwl8k_vif->last_beacon_crc = ~0;
+	mwl8k_vif->last_beacon_int = ~0;
 
 	/* Set the mac address.  */
 	mwl8k_cmd_set_mac_addr(hw, vif, vif->addr);
@@ -5091,19 +5130,27 @@ static void
 mwl8k_bss_info_changed_ap(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 			  struct ieee80211_bss_conf *info, u32 changed)
 {
+	struct mwl8k_priv *priv = hw->priv;
+	struct mwl8k_vif *mwl8k_vif = MWL8K_VIF(vif);
+	struct sk_buff *skb;
+	bool update_beacon;
+	u32 crc;
 	int rc;
 
 	if (mwl8k_fw_lock(hw))
 		return;
 
-	if (changed & BSS_CHANGED_ERP_PREAMBLE) {
+	if ((changed & BSS_CHANGED_ERP_PREAMBLE) &&
+	    priv->last_short_preamble != vif->bss_conf.use_short_preamble) {
 		rc = mwl8k_set_radio_preamble(hw,
 				vif->bss_conf.use_short_preamble);
 		if (rc)
 			goto out;
+		priv->last_short_preamble = vif->bss_conf.use_short_preamble;
 	}
 
-	if (changed & BSS_CHANGED_BASIC_RATES) {
+	if ((changed & BSS_CHANGED_BASIC_RATES) &&
+	    priv->last_basic_rates != vif->bss_conf.basic_rates) {
 		int idx;
 		int rate;
 
@@ -5122,17 +5169,32 @@ mwl8k_bss_info_changed_ap(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 			rate = mwl8k_rates_50[idx].hw_value;
 
 		mwl8k_cmd_use_fixed_rate_ap(hw, rate, rate);
+		priv->last_basic_rates = vif->bss_conf.basic_rates;
 	}
 
-	if (changed & (BSS_CHANGED_BEACON_INT | BSS_CHANGED_BEACON)) {
-		struct sk_buff *skb;
+	update_beacon = false;
+
+	if ((changed & BSS_CHANGED_BEACON_INT) &&
+	    mwl8k_vif->last_beacon_int != vif->bss_conf.beacon_int)
+		update_beacon = true;
 
 		skb = ieee80211_beacon_get(hw, vif);
-		if (skb != NULL) {
-			mwl8k_cmd_set_beacon(hw, vif, skb->data, skb->len);
-			kfree_skb(skb);
+	crc = 0;
+
+	if (changed & BSS_CHANGED_BEACON) {
+		if (skb) {
+			crc = crc32_le(~0, skb->data, skb->len);
+			if (crc != mwl8k_vif->last_beacon_crc)
+				update_beacon = true;
 		}
 	}
+
+	if (skb && update_beacon) {
+		mwl8k_cmd_set_beacon(hw, vif, skb->data, skb->len);
+		mwl8k_vif->last_beacon_crc = crc;
+		mwl8k_vif->last_beacon_int = vif->bss_conf.beacon_int;
+	}
+	kfree_skb(skb);
 
 	if (changed & BSS_CHANGED_BEACON_ENABLED)
 		mwl8k_cmd_bss_start(hw, vif, info->enable_beacon);
@@ -6108,9 +6170,7 @@ static int mwl8k_firmware_load_success(struct mwl8k_priv *priv)
 
 	/* TX reclaim and RX tasklets.  */
 	tasklet_init(&priv->poll_tx_task, mwl8k_tx_poll, (unsigned long)hw);
-	tasklet_disable(&priv->poll_tx_task);
 	tasklet_init(&priv->poll_rx_task, mwl8k_rx_poll, (unsigned long)hw);
-	tasklet_disable(&priv->poll_rx_task);
 
 	/* Power management cookie */
 	priv->cookie = pci_alloc_consistent(priv->pdev, 4, &priv->cookie_dma);

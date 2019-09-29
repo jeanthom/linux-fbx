@@ -131,19 +131,25 @@ static bool cs42l52_volatile_register(struct device *dev, unsigned int reg)
 	}
 }
 
-static DECLARE_TLV_DB_SCALE(hl_tlv, -10200, 50, 0);
+static DECLARE_TLV_DB_SCALE(bass_gain_tlv, -1050, 150, 0);
 
-static DECLARE_TLV_DB_SCALE(hpd_tlv, -9600, 50, 1);
+static DECLARE_TLV_DB_SCALE(mst_tlv, -6000, 50, 0);
+
+static DECLARE_TLV_DB_SCALE(hpd_tlv, -9600, 50, 0);
 
 static DECLARE_TLV_DB_SCALE(ipd_tlv, -9600, 100, 0);
 
 static DECLARE_TLV_DB_SCALE(mic_tlv, 1600, 100, 0);
 
+static DECLARE_TLV_DB_SCALE(adc_mix_tlv, -5150, 50, 0);
+
 static DECLARE_TLV_DB_SCALE(pga_tlv, -600, 50, 0);
 
-static DECLARE_TLV_DB_SCALE(mix_tlv, -50, 50, 0);
+static DECLARE_TLV_DB_SCALE(mix_tlv, -5150, 50, 0);
 
-static DECLARE_TLV_DB_SCALE(beep_tlv, -56, 200, 0);
+static DECLARE_TLV_DB_SCALE(bypass_tlv, -6000, 50, 0);
+
+static DECLARE_TLV_DB_SCALE(beep_tlv, -5600, 200, 0);
 
 static const DECLARE_TLV_DB_RANGE(limiter_tlv,
 	0, 2, TLV_DB_SCALE_ITEM(-3000, 600, 0),
@@ -344,18 +350,18 @@ static const struct snd_kcontrol_new hpr_ctl =
 static const struct snd_kcontrol_new cs42l52_snd_controls[] = {
 
 	SOC_DOUBLE_R_SX_TLV("Master Volume", CS42L52_MASTERA_VOL,
-			      CS42L52_MASTERB_VOL, 0, 0x34, 0xE4, hl_tlv),
+			      CS42L52_MASTERB_VOL, 0, 0x88, 0x90, mst_tlv),
 
 	SOC_DOUBLE_R_SX_TLV("Headphone Volume", CS42L52_HPA_VOL,
-			      CS42L52_HPB_VOL, 0, 0x34, 0xC0, hpd_tlv),
+			      CS42L52_HPB_VOL, 0, 0x40, 0xc0, hpd_tlv),
 
 	SOC_ENUM("Headphone Analog Gain", hp_gain_enum),
 
 	SOC_DOUBLE_R_SX_TLV("Speaker Volume", CS42L52_SPKA_VOL,
-			      CS42L52_SPKB_VOL, 0, 0x40, 0xC0, hl_tlv),
+			    CS42L52_SPKB_VOL, 0, 0x40, 0xc0, hpd_tlv),
 
 	SOC_DOUBLE_R_SX_TLV("Bypass Volume", CS42L52_PASSTHRUA_VOL,
-			      CS42L52_PASSTHRUB_VOL, 0, 0x88, 0x90, pga_tlv),
+			      CS42L52_PASSTHRUB_VOL, 0, 0x88, 0x90, bypass_tlv),
 
 	SOC_DOUBLE("Bypass Mute", CS42L52_MISC_CTL, 4, 5, 1, 0),
 
@@ -368,7 +374,7 @@ static const struct snd_kcontrol_new cs42l52_snd_controls[] = {
 			      CS42L52_ADCB_VOL, 0, 0xA0, 0x78, ipd_tlv),
 	SOC_DOUBLE_R_SX_TLV("ADC Mixer Volume",
 			     CS42L52_ADCA_MIXER_VOL, CS42L52_ADCB_MIXER_VOL,
-				0, 0x19, 0x7F, ipd_tlv),
+				0, 0x19, 0x7F, adc_mix_tlv),
 
 	SOC_DOUBLE("ADC Switch", CS42L52_ADC_MISC_CTL, 0, 1, 1, 0),
 
@@ -376,7 +382,7 @@ static const struct snd_kcontrol_new cs42l52_snd_controls[] = {
 		     CS42L52_ADCB_MIXER_VOL, 7, 1, 1),
 
 	SOC_DOUBLE_R_SX_TLV("PGA Volume", CS42L52_PGAA_CTL,
-			    CS42L52_PGAB_CTL, 0, 0x28, 0x24, pga_tlv),
+			    CS42L52_PGAB_CTL, 0, 0xF4, 0x24, pga_tlv),
 
 	SOC_DOUBLE_R_SX_TLV("PCM Mixer Volume",
 			    CS42L52_PCMA_MIXER_VOL, CS42L52_PCMB_MIXER_VOL,
@@ -396,15 +402,15 @@ static const struct snd_kcontrol_new cs42l52_snd_controls[] = {
 
 	SOC_SINGLE("Tone Control Switch", CS42L52_BEEP_TONE_CTL, 0, 1, 1),
 	SOC_SINGLE_TLV("Treble Gain Volume",
-			    CS42L52_TONE_CTL, 4, 15, 1, hl_tlv),
+			    CS42L52_TONE_CTL, 4, 0xf, 1, bass_gain_tlv),
 	SOC_SINGLE_TLV("Bass Gain Volume",
-			    CS42L52_TONE_CTL, 0, 15, 1, hl_tlv),
+			    CS42L52_TONE_CTL, 0, 0xf, 1, bass_gain_tlv),
 
 	/* Limiter */
 	SOC_SINGLE_TLV("Limiter Max Threshold Volume",
-		       CS42L52_LIMITER_CTL1, 5, 7, 0, limiter_tlv),
+		       CS42L52_LIMITER_CTL1, 5, 7, 1, limiter_tlv),
 	SOC_SINGLE_TLV("Limiter Cushion Threshold Volume",
-		       CS42L52_LIMITER_CTL1, 2, 7, 0, limiter_tlv),
+		       CS42L52_LIMITER_CTL1, 2, 7, 1, limiter_tlv),
 	SOC_SINGLE_TLV("Limiter Release Rate Volume",
 		       CS42L52_LIMITER_CTL2, 0, 63, 0, limiter_tlv),
 	SOC_SINGLE_TLV("Limiter Attack Rate Volume",
@@ -846,14 +852,12 @@ static int cs42l52_set_bias_level(struct snd_soc_codec *codec,
 		break;
 	case SND_SOC_BIAS_STANDBY:
 		if (snd_soc_codec_get_bias_level(codec) == SND_SOC_BIAS_OFF) {
-			regcache_cache_only(cs42l52->regmap, false);
 			regcache_sync(cs42l52->regmap);
 		}
 		snd_soc_write(codec, CS42L52_PWRCTL1, CS42L52_PWRCTL1_PDN_ALL);
 		break;
 	case SND_SOC_BIAS_OFF:
 		snd_soc_write(codec, CS42L52_PWRCTL1, CS42L52_PWRCTL1_PDN_ALL);
-		regcache_cache_only(cs42l52->regmap, true);
 		break;
 	}
 
@@ -1031,8 +1035,6 @@ static int cs42l52_probe(struct snd_soc_codec *codec)
 {
 	struct cs42l52_private *cs42l52 = snd_soc_codec_get_drvdata(codec);
 
-	regcache_cache_only(cs42l52->regmap, true);
-
 	cs42l52_add_mic_controls(codec);
 
 	cs42l52_init_beep(codec);
@@ -1145,7 +1147,7 @@ static int cs42l52_i2c_probe(struct i2c_client *i2c_client,
 		cs42l52->pdata = *pdata;
 	}
 
-	if (cs42l52->pdata.reset_gpio) {
+	if ((int)cs42l52->pdata.reset_gpio >= 0) {
 		ret = devm_gpio_request_one(&i2c_client->dev,
 					    cs42l52->pdata.reset_gpio,
 					    GPIOF_OUT_INIT_HIGH,

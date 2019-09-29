@@ -101,6 +101,28 @@ static int udp_packet(struct nf_conn *ct,
 	return NF_ACCEPT;
 }
 
+#ifdef CONFIG_IP_FFN
+int external_udpv4_packet(struct nf_conn *ct,
+			  const struct sk_buff *skb,
+			  unsigned int dataoff,
+			  enum ip_conntrack_info ctinfo)
+{
+	return udp_packet(ct, skb, dataoff, ctinfo, AF_INET, 0,
+			  udp_get_timeouts(nf_ct_net(ct)));
+}
+#endif
+
+#ifdef CONFIG_IPV6_FFN
+int external_udpv6_packet(struct nf_conn *ct,
+			  const struct sk_buff *skb,
+			  unsigned int dataoff,
+			  enum ip_conntrack_info ctinfo)
+{
+	return udp_packet(ct, skb, dataoff, ctinfo, AF_INET, 0,
+			  udp_get_timeouts(nf_ct_net(ct)));
+}
+#endif
+
 /* Called when a new connection for this protocol found. */
 static bool udp_new(struct nf_conn *ct, const struct sk_buff *skb,
 		    unsigned int dataoff, unsigned int *timeouts)

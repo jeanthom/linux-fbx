@@ -318,6 +318,24 @@ static ssize_t mtd_bbtblocks_show(struct device *dev,
 }
 static DEVICE_ATTR(bbt_blocks, S_IRUGO, mtd_bbtblocks_show, NULL);
 
+static ssize_t mtd_nand_type_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct mtd_info *mtd = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%s\n", mtd->nand_type);
+}
+static DEVICE_ATTR(nand_type, S_IRUGO, mtd_nand_type_show, NULL);
+
+static ssize_t mtd_nand_manufacturer_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct mtd_info *mtd = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%s\n", mtd->nand_manufacturer);
+}
+static DEVICE_ATTR(nand_manufacturer, S_IRUGO, mtd_nand_manufacturer_show, NULL);
+
 static struct attribute *mtd_attrs[] = {
 	&dev_attr_type.attr,
 	&dev_attr_flags.attr,
@@ -335,6 +353,8 @@ static struct attribute *mtd_attrs[] = {
 	&dev_attr_bad_blocks.attr,
 	&dev_attr_bbt_blocks.attr,
 	&dev_attr_bitflip_threshold.attr,
+	&dev_attr_nand_type.attr,
+	&dev_attr_nand_manufacturer.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(mtd);

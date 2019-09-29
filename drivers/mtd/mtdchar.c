@@ -190,6 +190,7 @@ static ssize_t mtdchar_read(struct file *file, char __user *buf, size_t count,
 		{
 			struct mtd_oob_ops ops;
 
+			memset(&ops, 0, sizeof (ops));
 			ops.mode = MTD_OPS_RAW;
 			ops.datbuf = kbuf;
 			ops.oobbuf = NULL;
@@ -284,6 +285,7 @@ static ssize_t mtdchar_write(struct file *file, const char __user *buf, size_t c
 		{
 			struct mtd_oob_ops ops;
 
+			memset(&ops, 0, sizeof (ops));
 			ops.mode = MTD_OPS_RAW;
 			ops.datbuf = kbuf;
 			ops.oobbuf = NULL;
@@ -692,6 +694,10 @@ static int mtdchar_ioctl(struct file *file, u_int cmd, u_long arg)
 			erase->callback = mtdchar_erase_callback;
 			erase->priv = (unsigned long)&waitq;
 
+#ifdef CONFIG_MTD_ERASE_PRINTK
+			printk(KERN_DEBUG "mtd: %s: ERASE offset=@%08llx\n",
+			       mtd->name, erase->addr);
+#endif
 			/*
 			  FIXME: Allow INTERRUPTIBLE. Which means
 			  not having the wait_queue head on the stack.

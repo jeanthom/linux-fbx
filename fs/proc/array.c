@@ -140,6 +140,21 @@ static inline const char *get_task_state(struct task_struct *tsk)
 	return task_state_array[fls(state)];
 }
 
+static const char *const task_exec_mode_array[] = {
+	"0 (Denied)",
+	"1 (Once)",
+	"2 (Unlimited)",
+};
+
+static inline const char *get_task_exec_mode(struct task_struct *tsk)
+{
+	unsigned int exec_mode = tsk->exec_mode;
+
+	if (exec_mode > EXEC_MODE_UNLIMITED)
+		return "? (Invalid)";
+	return task_exec_mode_array[exec_mode];
+}
+
 static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 				struct pid *pid, struct task_struct *p)
 {
@@ -369,6 +384,12 @@ static inline void task_context_switch_counts(struct seq_file *m,
 			p->nivcsw);
 }
 
+static inline void task_exec_mode(struct seq_file *m,
+				  struct task_struct *p)
+{
+	seq_printf(m, "Exec mode: %s\n", get_task_exec_mode(p));
+}
+
 static void task_cpus_allowed(struct seq_file *m, struct task_struct *task)
 {
 	seq_printf(m, "Cpus_allowed:\t%*pb\n",
@@ -395,6 +416,7 @@ int proc_pid_status(struct seq_file *m, struct pid_namespace *ns,
 	task_cpus_allowed(m, task);
 	cpuset_task_status_allowed(m, task);
 	task_context_switch_counts(m, task);
+	task_exec_mode(m, task);
 	return 0;
 }
 

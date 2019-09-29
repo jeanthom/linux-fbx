@@ -136,6 +136,10 @@ fw-shipped-$(CONFIG_USB_VICAM) += vicam/firmware.fw
 fw-shipped-$(CONFIG_VIDEO_CPIA2) += cpia2/stv0672_vp4.bin
 fw-shipped-$(CONFIG_YAM) += yam/1200.bin yam/9600.bin
 
+fw-shipped-$(CONFIG_MWL8K) += mwl8k/helper_8366.fw mwl8k/fmimage_8764_ap-1.fw \
+                               mwl8k/fmimage_8366_ap-3.fw
+
+
 fw-shipped-all := $(fw-shipped-y) $(fw-shipped-m) $(fw-shipped-)
 
 quiet_cmd_ihex  = IHEX    $@
@@ -235,3 +239,10 @@ targets := $(fw-shipped-) $(patsubst $(obj)/%,%, \
 obj- := dummy
 
 hostprogs-y := ihex2fw
+
+# hack for 'make mrproper' and mwl8k .fw files being removed.
+quiet_cmd_shipped = SHIPPED $@
+cmd_shipped = cat $< > $@
+
+%.fw: %.fw_shipped
+	$(call cmd,shipped)

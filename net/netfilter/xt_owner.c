@@ -29,6 +29,61 @@ static int owner_check(const struct xt_mtchk_param *par)
 	return 0;
 }
 
+static int __owner_match_simple_gid(kgid_t gid, kgid_t gid_min, kgid_t gid_max)
+{
+	return gid_gte(gid, gid_min) && gid_lte(gid, gid_max);
+}
+
+/*
+ * see kernel/groups.c:groups_to_user() function, which inspired the
+ * content of this function.
+ */
+static int __owner_match_gid_groupinfo(const struct group_info *group_info,
+				       kgid_t gid_min, kgid_t gid_max)
+{
+	unsigned int count = group_info->ngroups;
+	unsigned int block;
+
+	for (block = 0; block < group_info->nblocks; ++block) {
+		unsigned int cp_count = min(NGROUPS_PER_BLOCK, count);
+		unsigned int i;
+
+		for (i = 0; i < cp_count; ++i) {
+			if (__owner_match_simple_gid(
+					     group_info->blocks[block][i],
+					     gid_min, gid_max)) {
+				return 1;
+			}
+			count -= cp_count;
+		}
+	}
+	return 0;
+}
+
+static int owner_match_gid(const struct file *filp,
+			   const struct xt_owner_match_info *info)
+{
+	kgid_t gid_min = make_kgid(&init_user_ns, info->gid_min);
+	kgid_t gid_max = make_kgid(&init_user_ns, info->gid_max);
+
+	/*
+	 * direct match, this is the simple and only case handled by
+	 * the old code, file fsgid matches info gid range.
+	 */
+	if (__owner_match_simple_gid(filp->f_cred->fsgid, gid_min, gid_max))
+		return 1;
+
+	/*
+	 * otherwise we need to have a look to the group list available
+	 * in f_cred->group_info.
+	 */
+	if (__owner_match_gid_groupinfo(filp->f_cred->group_info,
+					gid_min, gid_max))
+		return 1;
+
+	return 0;
+}
+
 static bool
 owner_mt(const struct sk_buff *skb, struct xt_action_param *par)
 {
@@ -60,10 +115,7 @@ owner_mt(const struct sk_buff *skb, struct xt_action_param *par)
 	}
 
 	if (info->match & XT_OWNER_GID) {
-		kgid_t gid_min = make_kgid(&init_user_ns, info->gid_min);
-		kgid_t gid_max = make_kgid(&init_user_ns, info->gid_max);
-		if ((gid_gte(filp->f_cred->fsgid, gid_min) &&
-		     gid_lte(filp->f_cred->fsgid, gid_max)) ^
+		if (owner_match_gid(filp, info) ^
 		    !(info->invert & XT_OWNER_GID))
 			return false;
 	}

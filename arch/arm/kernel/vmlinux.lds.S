@@ -190,6 +190,12 @@ SECTIONS
 		*(.arch.info.init)
 		__arch_info_end = .;
 	}
+	.init.fdt.info : {
+		. = ALIGN(4);
+		__fdt_info_begin = .;
+		*(.arch.fdt.init)
+		__fdt_info_end = .;
+ 	}
 	.init.tagtable : {
 		__tagtable_begin = .;
 		*(.taglist.init)

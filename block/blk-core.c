@@ -2296,7 +2296,7 @@ void blk_account_io_completion(struct request *req, unsigned int bytes)
 	}
 }
 
-void blk_account_io_done(struct request *req)
+void blk_account_io_done(struct request *req, int error)
 {
 	/*
 	 * Account IO completion.  flush_rq isn't accounted as a
@@ -2312,6 +2312,8 @@ void blk_account_io_done(struct request *req)
 		cpu = part_stat_lock();
 		part = req->part;
 
+		if (error < 0)
+			part_stat_inc(cpu, part, io_errors[rw]);
 		part_stat_inc(cpu, part, ios[rw]);
 		part_stat_add(cpu, part, ticks[rw], duration);
 		part_round_stats(cpu, part);
@@ -2755,7 +2757,7 @@ void blk_finish_request(struct request *req, int error)
 	if (req->cmd_flags & REQ_DONTPREP)
 		blk_unprep_request(req);
 
-	blk_account_io_done(req);
+	blk_account_io_done(req, error);
 
 	if (req->end_io)
 		req->end_io(req, error);

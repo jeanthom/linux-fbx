@@ -124,7 +124,19 @@
 
 /* Macro to read the registers */
 
-#define adt7475_read(reg) i2c_smbus_read_byte_data(client, (reg))
+static inline s32 __adt7475_read(const struct i2c_client *client, u8 cmd)
+{
+	s32 ret;
+
+	ret = i2c_smbus_read_byte_data(client, cmd);
+	if (ret < 0) {
+		printk("__adt7475_read error: %d\n", ret);
+		return 0;
+	}
+	return ret;
+}
+
+#define adt7475_read(reg) __adt7475_read(client, (reg))
 
 /* Macros to easily index the registers */
 
@@ -850,7 +862,7 @@ static ssize_t set_pwmfreq(struct device *dev, struct device_attribute *attr,
 
 	data->range[sattr->index] =
 		adt7475_read(TEMP_TRANGE_REG(sattr->index));
-	data->range[sattr->index] &= ~7;
+	data->range[sattr->index] &= ~0xf;
 	data->range[sattr->index] |= out;
 
 	i2c_smbus_write_byte_data(client, TEMP_TRANGE_REG(sattr->index),

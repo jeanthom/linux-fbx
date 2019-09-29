@@ -937,6 +937,14 @@ void __init setup_arch(char **cmdline_p)
 	const struct machine_desc *mdesc;
 
 	setup_processor();
+
+	/*
+	 * parse freebox tags before potentially overriding the
+	 * __atags_pointer with the in-kernel FDT.
+	 */
+	freebox_atags_wa(__atags_pointer);
+	__atags_pointer = setup_fdt_machtype(__machine_arch_type,
+					     __atags_pointer);
 	mdesc = setup_machine_fdt(__atags_pointer);
 	if (!mdesc)
 		mdesc = setup_machine_tags(__atags_pointer, __machine_arch_type);

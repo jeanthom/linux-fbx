@@ -690,3 +690,16 @@ void mdio_bus_exit(void)
 	class_unregister(&mdio_bus_class);
 	bus_unregister(&mdio_bus_type);
 }
+
+static int match_mdio_bus(struct device *dev, const void *ptr)
+{
+	return !strcmp(dev->kobj.name, ptr);
+}
+
+struct mii_bus *mdio_find_bus(const char *name)
+{
+	struct device *d = class_find_device(&mdio_bus_class, NULL,
+					     name, match_mdio_bus);
+
+	return d ? to_mii_bus(d) : NULL;
+}

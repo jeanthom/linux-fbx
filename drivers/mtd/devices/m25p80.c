@@ -47,6 +47,34 @@ static int m25p80_read_reg(struct spi_nor *nor, u8 code, u8 *val, int len)
 	return ret;
 }
 
+static int m25p80_read_alt_id(struct spi_nor *nor, u8 cmd, u8 *val, int len)
+{
+	struct m25p *flash = nor->priv;
+	struct spi_device *spi = flash->spi;
+	u8 cmdbuf[4] = { cmd, 0, 0, 0 };
+	int ret;
+
+	ret = spi_write_then_read(spi, cmdbuf, sizeof (cmdbuf), val, len);
+	if (ret < 0)
+		dev_err(&spi->dev, "error %d reading alt id %x\n", ret, cmd);
+
+	return ret;
+}
+
+static int m25p80_read_atmel_id(struct spi_nor *nor, u8 cmd, u8 *val, int len)
+{
+	struct m25p *flash = nor->priv;
+	struct spi_device *spi = flash->spi;
+	int ret;
+
+	printk("m25p80_read_atmel_id: 0x%x\n", cmd);
+	ret = spi_write_then_read(spi, &cmd, 1, val, len);
+	if (ret < 0)
+		dev_err(&spi->dev, "error %d reading ATMEL id %x\n", ret, cmd);
+
+	return ret;
+}
+
 static void m25p_addr2cmd(struct spi_nor *nor, unsigned int addr, u8 *cmd)
 {
 	/* opcode is in cmd[0] */
@@ -197,6 +225,8 @@ static int m25p_probe(struct spi_device *spi)
 	nor->erase = m25p80_erase;
 	nor->write_reg = m25p80_write_reg;
 	nor->read_reg = m25p80_read_reg;
+	nor->read_alt_id = m25p80_read_alt_id;
+	nor->read_atmel_id = m25p80_read_atmel_id;
 
 	nor->dev = &spi->dev;
 	nor->flash_node = spi->dev.of_node;

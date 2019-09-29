@@ -17,6 +17,7 @@
 #include <linux/rtnetlink.h>
 #include <linux/bug.h>
 #include <uapi/linux/if_vlan.h>
+#include <uapi/linux/pkt_sched.h>
 
 #define VLAN_HLEN	4		/* The additional bytes required by VLAN
 					 * (in addition to the Ethernet header)
@@ -109,6 +110,7 @@ struct vlan_pcpu_stats {
 extern struct net_device *__vlan_find_dev_deep_rcu(struct net_device *real_dev,
 					       __be16 vlan_proto, u16 vlan_id);
 extern struct net_device *vlan_dev_real_dev(const struct net_device *dev);
+extern struct net_device *vlan_dev_upper_dev(const struct net_device *dev);
 extern u16 vlan_dev_vlan_id(const struct net_device *dev);
 extern __be16 vlan_dev_vlan_proto(const struct net_device *dev);
 
@@ -176,7 +178,7 @@ vlan_dev_get_egress_qos_mask(struct net_device *dev, u32 skprio)
 
 	mp = vlan_dev_priv(dev)->egress_priority_map[(skprio & 0xF)];
 	while (mp) {
-		if (mp->priority == skprio) {
+		if (mp->priority == (skprio & TC_H_MIN_MASK)) {
 			return mp->vlan_qos; /* This should already be shifted
 					      * to mask correctly with the
 					      * VLAN's TCI */
@@ -212,6 +214,12 @@ __vlan_find_dev_deep_rcu(struct net_device *real_dev,
 }
 
 static inline struct net_device *vlan_dev_real_dev(const struct net_device *dev)
+{
+	BUG();
+	return NULL;
+}
+
+static inline struct net_device *vlan_dev_upper_dev(const struct net_device *dev)
 {
 	BUG();
 	return NULL;

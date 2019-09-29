@@ -1,0 +1,26 @@
+menu "RemoTI support"
+
+config REMOTI
+	tristate "RemoTI support"
+	depends on FBX6HD
+	---help---
+	  Texas Instruments RemoTI stack.
+
+config REMOTI_LEDS
+	tristate "RemoTI LEDS support"
+	depends on REMOTI
+	depends on LEDS_CLASS
+	---help---
+	  RemoTI LEDS class driver support.
+
+config REMOTI_GPIO
+	tristate "RemoTI gpio support"
+	depends on REMOTI
+	---help---
+	  gpiochip driver for the RemoTI RNP
+
+config REMOTI_USER
+	tristate "RemoTI userspace access"
+	depends on REMOTI
+
+endmenu

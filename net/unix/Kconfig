@@ -19,6 +19,9 @@ config UNIX
 
 	  Say Y unless you know what you are doing.
 
+config UNIX_ABSTRACT_IGNORE_NETNS
+	bool "make abstract namespace global to all network namespaces"
+
 config UNIX_DIAG
 	tristate "UNIX: socket monitoring interface"
 	depends on UNIX

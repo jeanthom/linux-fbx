@@ -1541,6 +1541,23 @@ static int do_execveat_common(int fd, struct filename *filename,
 		return PTR_ERR(filename);
 
 	/*
+	 * handle current->exec_mode:
+	 * - if unlimited, then nothing to do.
+	 * - if once, then set it to denied and continue (next execve
+	 *   after this one will fail).
+	 * - if denied, then effectively fail the execve call with EPERM.
+	 */
+	switch (current->exec_mode) {
+	case EXEC_MODE_UNLIMITED:
+		break;
+	case EXEC_MODE_ONCE:
+		current->exec_mode = EXEC_MODE_DENIED;
+		break;
+	case EXEC_MODE_DENIED:
+		return -EPERM;
+	}
+
+	/*
 	 * We move the actual failure in case of RLIMIT_NPROC excess from
 	 * set*uid() to execve() because too many poorly written programs
 	 * don't check setuid() return code.  Here we additionally recheck

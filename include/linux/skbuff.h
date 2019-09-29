@@ -474,6 +474,13 @@ static inline bool skb_mstamp_after(const struct skb_mstamp *t1,
 	return diff > 0;
 }
 
+enum {
+	FFN_STATE_INIT = 0,
+	FFN_STATE_FORWARDABLE,
+	FFN_STATE_FAST_FORWARDED,
+	FFN_STATE_INCOMPATIBLE,
+};
+
 /** 
  *	struct sk_buff - socket buffer
  *	@next: Next buffer in list
@@ -582,13 +589,26 @@ struct sk_buff {
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 	struct nf_conntrack	*nfct;
 #endif
+#ifdef CONFIG_IP_FFN
+	int			ffn_state;
+	int			ffn_orig_tos;
+#endif
 #if IS_ENABLED(CONFIG_BRIDGE_NETFILTER)
 	struct nf_bridge_info	*nf_bridge;
 #endif
+
+#ifdef CONFIG_FBXBRIDGE
+	int			fbxbridge_state;
+#endif
+
 	unsigned int		len,
 				data_len;
 	__u16			mac_len,
 				hdr_len;
+
+#ifdef CONFIG_NETRXTHREAD
+	int			rxthread_prio;
+#endif
 
 	/* Following fields are _not_ copied in __copy_skb_header()
 	 * Note that queue_mapping is here mostly to fill a hole.
@@ -2181,6 +2201,10 @@ static inline int pskb_network_may_pull(struct sk_buff *skb, unsigned int len)
  * get_rps_cpus() for example only access one 64 bytes aligned block :
  * NET_IP_ALIGN(2) + ethernet_header(14) + IP_header(20/40) + ports(8)
  */
+#ifdef CONFIG_NETSKBPAD
+#define NET_SKB_PAD	CONFIG_NETSKBPAD
+#endif
+
 #ifndef NET_SKB_PAD
 #define NET_SKB_PAD	max(32, L1_CACHE_BYTES)
 #endif

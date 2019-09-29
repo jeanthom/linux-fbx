@@ -14,6 +14,9 @@
 #ifdef CONFIG_OF
 
 extern const struct machine_desc *setup_machine_fdt(unsigned int dt_phys);
+extern unsigned int setup_fdt_machtype(unsigned int machtype,
+				       unsigned int atags_pointer);
+
 extern void __init arm_dt_init_cpu_maps(void);
 
 #else /* CONFIG_OF */
@@ -21,6 +24,10 @@ extern void __init arm_dt_init_cpu_maps(void);
 static inline const struct machine_desc *setup_machine_fdt(unsigned int dt_phys)
 {
 	return NULL;
+}
+static inline phys_addr_t setup_fdt_machtype(unsigned int machtype,
+					     unsigned int atags_pointer) {
+	return atags_pointer;
 }
 
 static inline void arm_dt_init_cpu_maps(void) { }

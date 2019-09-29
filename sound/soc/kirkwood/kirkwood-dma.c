@@ -206,22 +206,29 @@ static int kirkwood_dma_prepare(struct snd_pcm_substream *substream)
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct kirkwood_dma_data *priv = kirkwood_priv(substream);
 	unsigned long size, count;
+	unsigned long val;
 
 	/* compute buffer size in term of "words" as requested in specs */
 	size = frames_to_bytes(runtime, runtime->buffer_size);
 	size = (size>>2)-1;
 	count = snd_pcm_lib_period_bytes(substream);
 
+	val = readl(priv->io + KIRKWOOD_SCNTR_CTL);
+
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		writel(count, priv->io + KIRKWOOD_PLAY_BYTE_INT_COUNT);
 		writel(runtime->dma_addr, priv->io + KIRKWOOD_PLAY_BUF_ADDR);
 		writel(size, priv->io + KIRKWOOD_PLAY_BUF_SIZE);
+		val |= KIRKWOOD_SCNTR_CTL_PLAY_CLEAR |
+			KIRKWOOD_SCNTR_CTL_PLAY_EN;
 	} else {
 		writel(count, priv->io + KIRKWOOD_REC_BYTE_INT_COUNT);
 		writel(runtime->dma_addr, priv->io + KIRKWOOD_REC_BUF_ADDR);
 		writel(size, priv->io + KIRKWOOD_REC_BUF_SIZE);
+		val |= KIRKWOOD_SCNTR_CTL_REC_CLEAR |
+			KIRKWOOD_SCNTR_CTL_REC_EN;
 	}
-
+	writel(val, priv->io + KIRKWOOD_SCNTR_CTL);
 
 	return 0;
 }
@@ -240,6 +247,35 @@ static snd_pcm_uframes_t kirkwood_dma_pointer(struct snd_pcm_substream
 			readl(priv->io + KIRKWOOD_REC_BYTE_COUNT));
 
 	return count;
+}
+
+static snd_pcm_sframes_t kirkwood_dma_delay(struct snd_pcm_substream *substream,
+					    struct snd_soc_dai *codec_dai)
+{
+	struct snd_pcm_runtime *runtime = substream->runtime;
+	struct snd_soc_pcm_runtime *soc_runtime = substream->private_data;
+	struct snd_soc_dai *cpu_dai = soc_runtime->cpu_dai;
+	struct kirkwood_dma_data *priv;
+	snd_pcm_sframes_t cur_pointer;
+	u32 real;
+
+	priv = snd_soc_dai_get_dma_data(cpu_dai, substream);
+
+	/* it sucks that we have to call pointer again, would be
+	 * better if current one was given */
+	cur_pointer = kirkwood_dma_pointer(substream);
+
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+		real = readl(priv->io + KIRKWOOD_PLAY_SCNTR);
+	else
+		real = readl(priv->io + KIRKWOOD_REC_SCNTR);
+
+	real %= runtime->buffer_size;
+
+	if (cur_pointer >= real)
+		return cur_pointer - real;
+	return runtime->buffer_size - real + cur_pointer - 1;
+
 }
 
 static struct snd_pcm_ops kirkwood_dma_ops = {
@@ -320,6 +356,7 @@ static void kirkwood_dma_free_dma_buffers(struct snd_pcm *pcm)
 
 struct snd_soc_platform_driver kirkwood_soc_platform = {
 	.ops		= &kirkwood_dma_ops,
+	.delay		= kirkwood_dma_delay,
 	.pcm_new	= kirkwood_dma_new,
 	.pcm_free	= kirkwood_dma_free_dma_buffers,
 };

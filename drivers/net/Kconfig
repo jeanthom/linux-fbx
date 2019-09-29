@@ -428,4 +428,14 @@ config FUJITSU_ES
 
 source "drivers/net/hyperv/Kconfig"
 
+config TANGO2_ENET
+	tristate "SMP863x Builtin Ethernet support"
+	depends on NET_ETHERNET && TANGO2
+	select MII
+	select CRC32
+	help
+	 This option adds support for the SMP863x integrated Ethernet
+	 controller.  This driver uses NAPI and generic Linux MII
+	 support.
+
 endif # NETDEVICES

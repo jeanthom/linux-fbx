@@ -1,0 +1,109 @@
+/dts-v1/;
+
+#include "kirkwood.dtsi"
+#include "kirkwood-6281.dtsi"
+
+/ {
+	model = "Freebox Gateway V1";
+	compatible = "freebox,fbxgw1r";
+
+	chosen {
+		stdout-path = &uart1;
+	};
+
+	memory {
+		device_type = "memory";
+		reg = <0x00000000 0x20000000>; /* 512 MB */
+	};
+
+	ocp@f1000000 {
+		fbxwdt: fbxwatchdog-timer@20300 {
+			compatible = "marvell,orion-fbxwdt";
+			reg = <0x20300 0x28>, <0x20108 0x4>;
+			clocks = <&gate_clk 7>;
+			fbx,legacy-device-name = "orion_fbxwdt";
+			status = "okay";
+		};
+	};
+
+	aliases {
+		spi0 = &tdm_spi0;
+	};
+};
+
+&uart0 {
+	status = "okay";
+};
+&uart1 {
+	status = "okay";
+};
+
+&pmx_uart1 {
+	marvell,pins = "mpp15", "mpp16";
+	marvell,function = "uart1";
+};
+
+&pmx_uart0 {
+	/* only mpp11 here (uart rx) as mpp10 is used as a gpio */
+	marvell,pins = "mpp11";
+	marvell,function = "uart0";
+};
+
+
+&usb0 {
+	status = "okay";
+	fbx,legacy-device-name = "orion-ehci.0";
+};
+
+&eth0 {
+	status = "okay";
+	fbx,ff-model = <1>;
+};
+&eth0port {
+	fbxserial-mac-address = <0>;
+	speed = <1000>;
+	duplex = <1>;
+};
+
+&eth1 {
+	status = "okay";
+};
+&eth1port {
+	fbxserial-mac-address = <0>;
+	speed = <1000>;
+	duplex = <1>;
+};
+
+&mdio {
+	status = "okay";
+};
+
+&i2c0 {
+	status = "okay";
+	clock-frequency = <25000>;
+	fbx,legacy-device-name = "mv64xxx_i2c.0";
+
+	adt7475@2e {
+		compatible = "adi,adt7475";
+		reg = <0x2e>;
+	};
+};
+
+&tdm_spi0 {
+	fbx,cs-gpios = <(-1) 36>;
+	status = "okay";
+	pinctrl-0 = <&pmx_alt_tdm_spi>;
+};
+
+&sata {
+	status = "okay";
+	nr-ports = <2>;
+	fbx,legacy-device-name = "sata_mv.0";
+};
+
+&pciec {
+	status = "okay";
+};
+&pcie0 {
+	status = "okay";
+};

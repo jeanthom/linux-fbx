@@ -338,6 +338,10 @@ config HID_WALTOP
 	---help---
 	Support for Waltop tablets.
 
+config HID_FBX_REMOTE_AUDIO
+	tristate "Freebox BLE remote audio driver"
+	depends on HID && SND_PCM
+
 config HID_GYRATION
 	tristate "Gyration remote control"
 	depends on HID

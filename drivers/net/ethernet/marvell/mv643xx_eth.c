@@ -43,6 +43,7 @@
 #include <linux/in.h>
 #include <linux/ip.h>
 #include <net/tso.h>
+#include <net/arp.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <linux/etherdevice.h>
@@ -64,6 +65,18 @@
 #include <linux/of_irq.h>
 #include <linux/of_net.h>
 #include <linux/of_mdio.h>
+#include <linux/if_vlan.h>
+#include <linux/sort.h>
+#include <linux/fbxbridge.h>
+#include "../../../net/bridge/br_private.h"
+
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+#include <net/ip_ffn.h>
+#include <net/ip_tunnels.h>
+#include <net/ip6_ffn.h>
+#include <net/ip6_route.h>
+#include <net/ip6_tunnel.h>
+#endif
 
 static char mv643xx_eth_driver_name[] = "mv643xx_eth";
 static char mv643xx_eth_driver_version[] = "1.4";
@@ -107,6 +120,7 @@ static char mv643xx_eth_driver_version[] = "1.4";
 #define  DISABLE_AUTO_NEG_FOR_DUPLEX	0x00000004
 #define  FORCE_LINK_PASS		0x00000002
 #define  SERIAL_PORT_ENABLE		0x00000001
+#define PORT_VPT2P			0x0040
 #define PORT_STATUS			0x0044
 #define  TX_FIFO_EMPTY			0x00000400
 #define  TX_IN_PROGRESS			0x00000080
@@ -133,6 +147,7 @@ static char mv643xx_eth_driver_version[] = "1.4";
 #define INT_CAUSE_EXT			0x0064
 #define  INT_EXT_LINK_PHY		0x00110000
 #define  INT_EXT_TX			0x000000ff
+#define   INT_EXT_TX_0			0x00000001
 #define INT_MASK			0x0068
 #define INT_MASK_EXT			0x006c
 #define TX_FIFO_URGENT_THRESHOLD	0x0074
@@ -181,9 +196,9 @@ static char mv643xx_eth_driver_version[] = "1.4";
  */
 #define DEFAULT_RX_QUEUE_SIZE	128
 #define DEFAULT_TX_QUEUE_SIZE	512
-#define SKB_DMA_REALIGN		((PAGE_SIZE - NET_SKB_PAD) % SMP_CACHE_BYTES)
-
+#define RX_OFFSET		ALIGN(NET_SKB_PAD, SMP_CACHE_BYTES)
 #define TSO_HEADER_SIZE		128
+#define COPY_BREAK_SIZE		128
 
 /* Max number of allowed TCP segments for software TSO */
 #define MV643XX_MAX_TSO_SEGS 100
@@ -206,6 +221,8 @@ struct rx_desc {
 	u32 cmd_sts;		/* Descriptor command status		*/
 	u32 next_desc_ptr;	/* Next descriptor pointer		*/
 	u32 buf_ptr;		/* Descriptor buffer pointer		*/
+	u32 cookie;
+	u32 pad[3];
 };
 
 struct tx_desc {
@@ -214,6 +231,9 @@ struct tx_desc {
 	u32 cmd_sts;		/* Command/status field			*/
 	u32 next_desc_ptr;	/* Pointer to next descriptor		*/
 	u32 buf_ptr;		/* pointer to buffer for this descriptor*/
+	u32 cookie;
+	u32 cookie_size;
+	u32 pad[2];
 };
 #elif defined(__LITTLE_ENDIAN)
 struct rx_desc {
@@ -222,6 +242,8 @@ struct rx_desc {
 	u16 byte_cnt;		/* Descriptor buffer byte count		*/
 	u32 buf_ptr;		/* Descriptor buffer pointer		*/
 	u32 next_desc_ptr;	/* Next descriptor pointer		*/
+	u32 cookie;
+	u32 pad[3];
 };
 
 struct tx_desc {
@@ -230,6 +252,9 @@ struct tx_desc {
 	u16 byte_cnt;		/* buffer byte count			*/
 	u32 buf_ptr;		/* pointer to buffer for this descriptor*/
 	u32 next_desc_ptr;	/* Pointer to next descriptor		*/
+	u32 cookie;
+	u32 cookie_size;
+	u32 pad[2];
 };
 #else
 #error One of __BIG_ENDIAN or __LITTLE_ENDIAN must be defined
@@ -240,6 +265,11 @@ struct tx_desc {
 
 /* RX & TX descriptor status */
 #define ERROR_SUMMARY			0x00000001
+#define ERROR_CODE_RX_CRC		(0x0 << 1)
+#define ERROR_CODE_RX_OVERRUN		(0x1 << 1)
+#define ERROR_CODE_RX_MAX_LENGTH	(0x2 << 1)
+#define ERROR_CODE_RX_RESOURCE		(0x3 << 1)
+#define ERROR_CODE_MASK			(0x3 << 1)
 
 /* RX descriptor status */
 #define LAYER_4_CHECKSUM_OK		0x40000000
@@ -251,6 +281,7 @@ struct tx_desc {
 #define RX_PKT_IS_ETHERNETV2		0x00800000
 #define RX_PKT_LAYER4_TYPE_MASK		0x00600000
 #define RX_PKT_LAYER4_TYPE_TCP_IPV4	0x00000000
+#define RX_PKT_LAYER4_TYPE_UDP_IPV4	0x00200000
 #define RX_PKT_IS_VLAN_TAGGED		0x00080000
 
 /* TX descriptor command */
@@ -287,6 +318,7 @@ struct mv643xx_eth_shared_private {
 	int extended_rx_coal_limit;
 	int tx_bw_control;
 	int tx_csum_limit;
+	int unit;
 	struct clk *clk;
 };
 
@@ -296,6 +328,10 @@ struct mv643xx_eth_shared_private {
 
 static int mv643xx_eth_open(struct net_device *dev);
 static int mv643xx_eth_stop(struct net_device *dev);
+
+static int mii_bus_read(struct net_device *dev, int mii_id, int regnum);
+static void mii_bus_write(struct net_device *dev, int mii_id, int regnum,
+			  int value);
 
 
 /* per-port *****************************************************************/
@@ -333,22 +369,28 @@ struct mib_counters {
 	/* Non MIB hardware counters */
 	u32 rx_discard;
 	u32 rx_overrun;
+	/* Non MIB software counters */
+	u32 rx_packets_q[8];
+	u32 tx_packets_q[8];
 };
 
 struct rx_queue {
 	int index;
 
-	int rx_ring_size;
-
-	int rx_desc_count;
-	int rx_curr_desc;
-	int rx_used_desc;
+	unsigned int rx_ring_size;
+	unsigned int rx_curr_desc;
+	unsigned int rx_packets;
 
 	struct rx_desc *rx_desc_area;
 	dma_addr_t rx_desc_dma;
 	int rx_desc_area_size;
-	struct sk_buff **rx_skb;
 };
+
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+#define NAPI_TX_OFFSET	1
+#else
+#define NAPI_TX_OFFSET	0
+#endif
 
 struct tx_queue {
 	int index;
@@ -394,14 +436,13 @@ struct mv643xx_eth_private {
 
 	struct napi_struct napi;
 	u32 int_mask;
-	u8 oom;
 	u8 work_link;
 	u8 work_tx;
 	u8 work_tx_end;
 	u8 work_rx;
-	u8 work_rx_refill;
 
-	int skb_size;
+	unsigned int pkt_size;
+	unsigned int frag_size;
 
 	/*
 	 * RX state.
@@ -410,7 +451,6 @@ struct mv643xx_eth_private {
 	unsigned long rx_desc_sram_addr;
 	int rx_desc_sram_size;
 	int rxq_count;
-	struct timer_list rx_oom;
 	struct rx_queue rxq[8];
 
 	/*
@@ -427,8 +467,19 @@ struct mv643xx_eth_private {
 	 */
 	struct clk *clk;
 	unsigned int t_clk;
+
+	/*
+	 * mii bus for MII ioctls & low level early switch config.
+	 */
+	struct mii_bus *mii_bus;
+
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+	struct tx_queue *ff_txq;
+	struct notifier_block ff_notifier;
+#endif
 };
 
+static struct mv643xx_eth_private *mp_by_unit[4];
 
 /* port register accessors **************************************************/
 static inline u32 rdl(struct mv643xx_eth_private *mp, int offset)
@@ -508,7 +559,12 @@ static void txq_disable(struct tx_queue *txq)
 static void txq_maybe_wake(struct tx_queue *txq)
 {
 	struct mv643xx_eth_private *mp = txq_to_mp(txq);
-	struct netdev_queue *nq = netdev_get_tx_queue(mp->dev, txq->index);
+	struct netdev_queue *nq;
+
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+	WARN_ON(txq->index == 0);
+#endif
+	nq = netdev_get_tx_queue(mp->dev, txq->index - NAPI_TX_OFFSET);
 
 	if (netif_tx_queue_stopped(nq)) {
 		__netif_tx_lock(nq, smp_processor_id());
@@ -518,52 +574,1821 @@ static void txq_maybe_wake(struct tx_queue *txq)
 	}
 }
 
+static void *mv643xx_eth_frag_alloc(const struct mv643xx_eth_private *mp)
+{
+	if (likely(mp->frag_size <= PAGE_SIZE))
+		return napi_alloc_frag(mp->frag_size);
+	else
+		return kmalloc(mp->frag_size, GFP_ATOMIC);
+}
+
+static void mv643xx_eth_frag_free(const struct mv643xx_eth_private *mp,
+				  void *data)
+{
+	if (likely(mp->frag_size <= PAGE_SIZE))
+		skb_free_frag(data);
+	else
+		kfree(data);
+}
+
+static inline bool pkt_is_ipv4(u32 cmd_sts)
+{
+	return (cmd_sts & RX_PKT_IS_IPV4) == RX_PKT_IS_IPV4;
+}
+
+static inline bool pkt_is_vlan(u32 cmd_sts)
+{
+	return (cmd_sts & RX_PKT_IS_VLAN_TAGGED) == RX_PKT_IS_VLAN_TAGGED;
+}
+
+static inline bool pkt_is_tcp4(u32 cmd_sts)
+{
+	return (cmd_sts & RX_PKT_LAYER4_TYPE_MASK) ==
+		RX_PKT_LAYER4_TYPE_TCP_IPV4;
+}
+
+static inline bool pkt_is_udp4(u32 cmd_sts)
+{
+	return (cmd_sts & RX_PKT_LAYER4_TYPE_MASK) ==
+		RX_PKT_LAYER4_TYPE_UDP_IPV4;
+}
+
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+
+static bool ff_enabled;
+static unsigned int ff_mode;
+
+static bool ff_tx_queue_can_reclaim(struct tx_queue *txq)
+{
+	struct tx_desc *desc;
+	int tx_index;
+
+	if (!txq || !txq->tx_desc_count)
+		return false;
+
+	tx_index = txq->tx_used_desc;
+	desc = &txq->tx_desc_area[tx_index];
+
+	if ((desc->cmd_sts & BUFFER_OWNED_BY_DMA))
+		return false;
+
+	return true;
+}
+
+
+		/*
+ * size on which we invalidate data when we reclaim fast-forwarded
+ * buffer
+		 *
+ * worst case read lookup by rx path from RX_OFFSET is (VLAN + ip6 +
+ * iph + tcphdr)
+		 */
+#define FF_MAP_SIZE	(sizeof (struct vlan_ethhdr) + \
+			 sizeof (struct ipv6hdr) + \
+			 sizeof (struct iphdr) + \
+			 sizeof (struct tcphdr))
+
+static void *ff_tx_queue_frag_reclaim(struct mv643xx_eth_private *mp,
+				      unsigned int needed_frag_size)
+{
+	struct tx_queue *txq = mp->ff_txq;
+	struct tx_desc *desc;
+	void *frag;
+	unsigned int frag_size;
+	int tx_index;
+
+	if (!txq || !txq->tx_desc_count)
+		return NULL;
+
+	tx_index = txq->tx_used_desc;
+	desc = &txq->tx_desc_area[tx_index];
+
+	if ((desc->cmd_sts & BUFFER_OWNED_BY_DMA))
+		return NULL;
+
+	txq->tx_used_desc = tx_index + 1;
+	if (txq->tx_used_desc == txq->tx_ring_size)
+		txq->tx_used_desc = 0;
+
+	txq->tx_desc_count--;
+
+	frag = (void *)desc->cookie;
+	frag_size = desc->cookie_size;
+
+	if (frag_size != needed_frag_size) {
+		skb_free_frag(frag);
+		return NULL;
+	}
+
+	return frag;
+}
+#endif
+
+static int rx_desc_refill(struct mv643xx_eth_private *mp,
+			  struct rx_desc *rx_desc, bool unmap)
+{
+	unsigned int map_size = mp->pkt_size;
+	void *frag;
+
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+	if (ff_enabled) {
+		struct mv643xx_eth_private *omp;
+
+		/*
+		 * try to reclaim from "opposite" fast forward dedicated tx
+		 * queue
+		 */
+		if (ff_mode == 1)
+			omp = mp_by_unit[1 - mp->shared->unit];
+		else
+			omp = mp;
+
+		if (omp)
+			frag = ff_tx_queue_frag_reclaim(omp, mp->pkt_size);
+		else
+			frag = NULL;
+
+		if (!frag)
+			frag = mv643xx_eth_frag_alloc(mp);
+		else
+			map_size = FF_MAP_SIZE;
+	} else
+#endif
+		frag = mv643xx_eth_frag_alloc(mp);
+
+	if (!frag)
+		return -ENOMEM;
+
+	if (unmap)
+		dma_unmap_single(mp->dev->dev.parent, rx_desc->buf_ptr,
+				 mp->pkt_size, DMA_FROM_DEVICE);
+
+	rx_desc->buf_ptr = dma_map_single(mp->dev->dev.parent,
+					  frag + RX_OFFSET,
+					  map_size,
+					  DMA_FROM_DEVICE);
+	rx_desc->buf_size = mp->pkt_size;
+	rx_desc->cookie = (u32)frag;
+	wmb();
+	rx_desc->cmd_sts = BUFFER_OWNED_BY_DMA | RX_ENABLE_INTERRUPT;
+	wmb();
+	return 0;
+}
+
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+
+static struct {
+	struct net_device	*wan_dev;
+	struct net_device	*lan_dev;
+	unsigned long		jiffies;
+
+	struct net_device	*tun_dev;
+	u8			tun_ready:1;
+	u16			tun_mtu;
+
+	/* sit parameters */
+	union ff_tun_params {
+		struct {
+			u32		src;
+			u32		s6rd_prefix;
+			u32		s6rd_pmask;
+			u8		s6rd_plen;
+		} sit;
+
+		struct {
+			/* map parameters */
+			u32		ipv4_prefix;
+			u32		ipv4_pmask;
+			u8		ipv4_plen;
+			u8		ipv6_plen;
+			struct in6_addr	src;
+			struct in6_addr	br;
+
+			u64		ipv6_prefix;
+			u32		ea_addr_mask;
+			u16		ea_port_mask;
+			u8		psid_len;
+			u8		ea_lshift;
+		} map;
+	} u;
+
+	char			tun_dev_name[IFNAMSIZ];
+} ff;
+
+static LIST_HEAD(ff_devs);
+
+struct ff_dev {
+	const char		*desc;
+	unsigned int		unit;
+	bool			bridge_member;
+	unsigned int		vlan;
+	struct net_device	**pvirt_dev;
+
+	bool			active;
+	struct net_bridge_port	*br_port;
+	bool			dev_up;
+	struct list_head	next;
+};
+
+static inline bool is_bridge_dev(struct net_device *dev)
+{
+        return dev->priv_flags & IFF_EBRIDGE;
+}
+
+static u32 gen_netmask(u8 len)
+{
+	return htonl(~((1 << (32 - len)) - 1));
+}
+
+static void __ff_tun_set_params(bool ready,
+				unsigned int mtu,
+				const union ff_tun_params *tp)
+{
+	if (!ready) {
+		if (!ff.tun_ready)
+			return;
+
+		printk(KERN_DEBUG "ff: tunnel now NOT ready\n");
+		ff.tun_ready = 0;
+		return;
+	}
+
+	if (ff.tun_ready) {
+		if (ff.tun_mtu == mtu && !memcmp(tp, &ff.u, sizeof (*tp)))
+			return;
+	}
+
+	ff.tun_mtu = mtu;
+	memcpy(&ff.u, tp, sizeof (*tp));
+
+	if (!ff.tun_ready)
+		printk(KERN_DEBUG "ff: tunnel now ready\n");
+	else
+		printk(KERN_DEBUG "ff: tunnel params updated\n");
+
+	ff.tun_ready = true;
+}
+
+static void __ff_tun_read_params(void)
+{
+	union ff_tun_params tp;
+
+	if (!ff.tun_dev)
+		return;
+
+	if (!ff.wan_dev) {
+		__ff_tun_set_params(false, 0, NULL);
+		return;
+	}
+
+	memset(&tp, 0, sizeof (tp));
+
+	if (ff.tun_dev->type == ARPHRD_SIT) {
+		const struct ip_tunnel *tun = netdev_priv(ff.tun_dev);
+		const struct ip_tunnel_6rd_parm *ip6rd = &tun->ip6rd;
+
+		if (!ip6rd->prefixlen || ip6rd->prefixlen > 32) {
+			printk(KERN_DEBUG "ff: unsupported 6rd plen\n");
+			__ff_tun_set_params(false, 0, NULL);
+			return;
+		}
+
+		if (ff.tun_dev->mtu + sizeof (struct iphdr) >
+		    ff.wan_dev->mtu) {
+			printk(KERN_DEBUG "ff: WAN mtu too "
+			       "small for tunnel (%u => %u)\n",
+			       ff.tun_dev->mtu, ff.wan_dev->mtu);
+			__ff_tun_set_params(false, 0, NULL);
+			return;
+		}
+
+		tp.sit.src = tun->parms.iph.saddr;
+		tp.sit.s6rd_prefix = ip6rd->prefix.s6_addr32[0];
+		tp.sit.s6rd_pmask = gen_netmask(ip6rd->prefixlen);
+		tp.sit.s6rd_plen = ip6rd->prefixlen;
+		__ff_tun_set_params(true, ff.tun_dev->mtu, &tp);
+		return;
+	}
+
+	if (ff.tun_dev->type == ARPHRD_TUNNEL6) {
+		const struct ip6_tnl *t = netdev_priv(ff.tun_dev);
+		const struct __ip6_tnl_parm *prm = &t->parms;
+		const struct __ip6_tnl_fmr *fmr;
+
+		if (ff.tun_dev->mtu + sizeof (struct ipv6hdr) >
+		    ff.wan_dev->mtu) {
+			printk(KERN_DEBUG "ff: WAN mtu too "
+			       "small for tunnel (%u => %u)\n",
+			       ff.tun_dev->mtu, ff.wan_dev->mtu);
+			__ff_tun_set_params(false, 0, NULL);
+			return;
+		}
+
+		tp.map.src = prm->laddr;
+		tp.map.br = prm->raddr;
+
+		fmr = prm->fmrs;
+		if (!fmr) {
+			tp.map.ipv4_prefix = 0;
+			__ff_tun_set_params(true, ff.tun_dev->mtu, &tp);
+			return;
+		}
+
+		if (fmr->ip6_prefix_len < 32 ||
+		    (fmr->ip6_prefix_len + 32 - fmr->ip4_prefix_len > 64)) {
+			printk(KERN_DEBUG "ff: unsupp MAP-E: eabits "
+			       "span 32 bits\n");
+			__ff_tun_set_params(false, 0, NULL);
+			return;
+		}
+
+		if (fmr->offset) {
+			printk(KERN_DEBUG "ff: unsupp MAP-E: non zero "
+			       "PSID offset\n");
+			__ff_tun_set_params(false, 0, NULL);
+			return;
+		}
+
+		tp.map.ipv4_prefix = fmr->ip4_prefix.s_addr;
+		tp.map.ipv4_pmask = gen_netmask(fmr->ip4_prefix_len);
+		tp.map.ipv4_plen = fmr->ip4_prefix_len;
+		tp.map.ipv6_plen = fmr->ip6_prefix_len;
+		memcpy(&tp.map.ipv6_prefix, &fmr->ip6_prefix, 8);
+
+		tp.map.ea_addr_mask = ~gen_netmask(fmr->ip4_prefix_len);
+		if (fmr->ea_len <= 32 - fmr->ip4_prefix_len) {
+			/* v4 prefix or full IP */
+			u32 addr_bits;
+
+			addr_bits = fmr->ip4_prefix_len + fmr->ea_len;
+			if (addr_bits != 32)
+				tp.map.ea_addr_mask &= gen_netmask(addr_bits);
+			tp.map.psid_len = 0;
+		} else {
+			u8 psid_len;
+
+			psid_len = fmr->ea_len - (32 - fmr->ip4_prefix_len);
+			tp.map.psid_len = psid_len;
+			tp.map.ea_port_mask = gen_netmask(psid_len);
+		}
+
+		tp.map.ea_lshift = 32 - (fmr->ip6_prefix_len - 32) -
+			fmr->ea_len;
+
+		__ff_tun_set_params(true, ff.tun_dev->mtu, &tp);
+		return;
+	}
+}
+
+static void ff_tun_capture(void)
+{
+	struct net_device *dev;
+
+	local_bh_disable();
+	if (ff.tun_dev) {
+		local_bh_enable();
+		printk(KERN_ERR "ff: error: tun already registered\n");
+		return;
+	}
+
+	dev = dev_get_by_name(&init_net, ff.tun_dev_name);
+	if (!dev) {
+		local_bh_enable();
+		return;
+	}
+
+	if (dev->type != ARPHRD_SIT && dev->type != ARPHRD_TUNNEL6) {
+		local_bh_enable();
+		return;
+	}
+
+	if (!(dev->flags & IFF_UP)) {
+		dev_put(ff.tun_dev);
+		local_bh_enable();
+		return;
+	}
+
+	ff.tun_dev = dev;
+	__ff_tun_read_params();
+	local_bh_enable();
+	printk(KERN_INFO "ff: tun dev grabbed\n");
+}
+
+static void ff_tun_release(void)
+{
+	local_bh_disable();
+	dev_put(ff.tun_dev);
+	ff.tun_dev = NULL;
+	local_bh_enable();
+	printk(KERN_INFO "ff: tun dev released\n");
+}
+
+static int ff_device_event(struct notifier_block *this,
+			   unsigned long event, void *ptr)
+{
+	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
+	struct mv643xx_eth_private *mp;
+	struct ff_dev *ff_dev;
+
+	if (!net_eq(dev_net(dev), &init_net))
+		return 0;
+
+	if (!strcmp(dev->name, ff.tun_dev_name)) {
+		local_bh_disable();
+
+		switch (event) {
+		case NETDEV_UP:
+			if (!ff.tun_dev)
+				ff_tun_capture();
+			break;
+
+		case NETDEV_CHANGE:
+		case NETDEV_CHANGEMTU:
+			if (ff.tun_dev == dev)
+				__ff_tun_read_params();
+			break;
+
+		case NETDEV_GOING_DOWN:
+		case NETDEV_DOWN:
+		case NETDEV_UNREGISTER:
+			if (ff.tun_dev == dev)
+				ff_tun_release();
+			break;
+		}
+
+		local_bh_enable();
+		return 0;
+	}
+
+	list_for_each_entry(ff_dev, &ff_devs, next) {
+		mp = container_of(this, typeof(*mp), ff_notifier);
+		if (mp->shared->unit != ff_dev->unit)
+			continue;
+
+		if (ff_dev->vlan) {
+			if (!is_vlan_dev(dev))
+				continue;
+
+			switch (event) {
+			case NETDEV_UP:
+				if (vlan_dev_upper_dev(dev) != mp->dev ||
+				    vlan_dev_vlan_id(dev) != ff_dev->vlan)
+					continue;
+
+				if (ff_dev->active)
+					continue;
+
+				dev_hold(dev);
+
+				local_bh_disable();
+				*(ff_dev->pvirt_dev) = dev;
+
+				if (ff_dev->pvirt_dev == &ff.wan_dev)
+					__ff_tun_read_params();
+				local_bh_enable();
+
+				ff_dev->active = true;
+				printk(KERN_INFO "ff: ff_dev %s: active "
+				       "for %s\n", ff_dev->desc,
+				       dev->name);
+				break;
+
+			case NETDEV_GOING_DOWN:
+			case NETDEV_DOWN:
+			case NETDEV_UNREGISTER:
+				if (!ff_dev->active)
+					continue;
+
+				if (vlan_dev_upper_dev(dev) != mp->dev ||
+				    vlan_dev_vlan_id(dev) != ff_dev->vlan)
+					continue;
+
+				local_bh_disable();
+				*(ff_dev->pvirt_dev) = NULL;
+				local_bh_enable();
+				dev_put(dev);
+				ff_dev->active = false;
+
+				printk(KERN_INFO "ff: ff_dev %s: now "
+				       "inactive\n", ff_dev->desc);
+				break;
+
+			default:
+				break;
+			}
+		}
+
+		if (ff_dev->bridge_member) {
+			struct net_bridge *br;
+			bool ok;
+
+			switch (event) {
+			case NETDEV_UP:
+				if (dev == mp->dev)
+					ff_dev->dev_up = true;
+				break;
+
+			case NETDEV_GOING_DOWN:
+			case NETDEV_DOWN:
+			case NETDEV_UNREGISTER:
+				if (dev == mp->dev)
+					ff_dev->dev_up = false;
+				break;
+
+			case NETDEV_CHANGEUPPER:
+				if (dev == mp->dev) {
+					if ((dev->priv_flags &
+					     IFF_BRIDGE_PORT) &&
+					    netdev_master_upper_dev_get(dev))
+						ff_dev->br_port = br_port_get_rcu(dev);
+					else
+						ff_dev->br_port = NULL;
+				}
+				break;
+
+			default:
+				break;
+			}
+
+			ok = false;
+			if (ff_dev->dev_up && ff_dev->br_port) {
+				br = ff_dev->br_port->br;
+				if (br->dev->flags & IFF_UP)
+					ok = true;
+			}
+
+			if (!(ok ^ ff_dev->active))
+				continue;
+
+			if (ok) {
+				dev_hold(br->dev);
+				local_bh_disable();
+				*(ff_dev->pvirt_dev) = br->dev;
+				local_bh_enable();
+				ff_dev->active = true;
+
+				printk(KERN_INFO "ff: ff_dev %s: active "
+				       "for %s\n", ff_dev->desc,
+				       br->dev->name);
+
+
+			} else {
+				dev = *(ff_dev->pvirt_dev);
+				local_bh_disable();
+				*(ff_dev->pvirt_dev) = NULL;
+				local_bh_enable();
+				dev_put(dev);
+				ff_dev->active = false;
+				printk(KERN_INFO "ff: ff_dev %s: "
+				       "now inactive\n", ff_dev->desc);
+			}
+		}
+	}
+
+	return 0;
+}
+
+enum ff_xmit_mode {
+	FF_XMIT_IPV4,
+	FF_XMIT_IPV6,
+	FF_XMIT_IPV6_IN_IPV4,
+	FF_XMIT_IPV4_IN_IPV6,
+};
+
+		/*
+ *
+		 */
+static bool ff_send(struct tx_queue *txq,
+		    u32 dma_buf_addr,
+		    void *frag,
+		    u32 frag_size,
+		    unsigned int send_len,
+		    unsigned int clean_len,
+		    bool hw_l3_checksum,
+		    bool hw_l4_checksum,
+		    bool is_tcp,
+		    bool is_vlan)
+{
+	struct tx_desc *tx_desc;
+	unsigned int tx_index;
+	u32 cmd_sts;
+
+	if (WARN_ON(txq->tx_desc_count == txq->tx_ring_size))
+		return 1;
+
+	dma_sync_single_for_device(NULL, dma_buf_addr,
+				   clean_len, DMA_TO_DEVICE);
+
+	tx_index = txq->tx_curr_desc++;
+	if (txq->tx_curr_desc == txq->tx_ring_size)
+		txq->tx_curr_desc = 0;
+
+	txq->tx_desc_count++;
+	txq->tx_desc_mapping[tx_index] = DESC_DMA_MAP_SINGLE;
+
+	tx_desc = &txq->tx_desc_area[tx_index];
+	tx_desc->byte_cnt = send_len;
+	tx_desc->buf_ptr = dma_buf_addr;
+	tx_desc->cookie = (u32)frag;
+	tx_desc->cookie_size = (u32)frag_size;
+
+	cmd_sts = TX_FIRST_DESC |
+		TX_LAST_DESC |
+		GEN_CRC |
+		BUFFER_OWNED_BY_DMA |
+		ZERO_PADDING;
+
+	if (hw_l3_checksum) {
+		cmd_sts |= (GEN_IP_V4_CHECKSUM |
+			    (5 << TX_IHL_SHIFT));
+
+		if (is_vlan)
+			cmd_sts |= MAC_HDR_EXTRA_4_BYTES;
+	}
+
+	if (hw_l4_checksum) {
+		cmd_sts |= (GEN_TCP_UDP_CHECKSUM |
+			    GEN_TCP_UDP_CHK_FULL);
+
+		if (!is_tcp)
+			cmd_sts |= UDP_FRAME;
+	}
+
+	tx_desc->cmd_sts = cmd_sts;
+	txq_enable(txq);
+
+	txq->tx_bytes += send_len;
+	txq->tx_packets++;
+
+	return 0;
+}
+
+/*
+ * IP_FFN private data
+ */
+struct ffn_priv {
+	struct in6_addr		tun_dest_ip6;
+	struct dst_entry	*tun_dst;
+};
+
+static void ffn_priv_release(struct ffn_priv *priv)
+{
+	dst_release(priv->tun_dst);
+}
+
+static void ffn_priv_destructor_cb(void *data)
+{
+	struct ffn_priv *priv = (struct ffn_priv *)data;
+	ffn_priv_release(priv);
+}
+
+static struct ffn_priv *ffn_get_ro_priv(struct ffn_lookup_entry *e)
+{
+	if (e->manip.priv_destructor != ffn_priv_destructor_cb)
+		return NULL;
+
+	return (struct ffn_priv *)e->manip.ffn_priv_area;
+}
+
+static struct ffn_priv *ffn_get_rw_priv(struct ffn_lookup_entry *e)
+{
+	BUILD_BUG_ON(sizeof (e->manip.ffn_priv_area) <
+		     sizeof (struct ffn_priv));
+
+	if (e->manip.priv_destructor &&
+	    e->manip.priv_destructor != ffn_priv_destructor_cb)
+		return NULL;
+
+	return (struct ffn_priv *)e->manip.ffn_priv_area;
+}
+
+/*
+ * IPV6_FFN private data
+ */
+struct ffn6_priv {
+	u32			tun_dest_ip;
+	struct dst_entry	*tun_dst;
+};
+
+static void ffn6_priv_release(struct ffn6_priv *priv)
+{
+	dst_release(priv->tun_dst);
+}
+
+static void ffn6_priv_destructor_cb(void *data)
+{
+	struct ffn6_priv *priv = (struct ffn6_priv *)data;
+	ffn6_priv_release(priv);
+}
+
+static struct ffn6_priv *ffn6_get_ro_priv(struct ffn6_lookup_entry *e6)
+{
+	if (e6->manip.priv_destructor != ffn6_priv_destructor_cb)
+		return NULL;
+
+	return (struct ffn6_priv *)e6->manip.ffn_priv_area;
+}
+
+static struct ffn6_priv *ffn6_get_rw_priv(struct ffn6_lookup_entry *e6)
+{
+	BUILD_BUG_ON(sizeof (e6->manip.ffn_priv_area) <
+		     sizeof (struct ffn6_priv));
+
+	if (e6->manip.priv_destructor &&
+	    e6->manip.priv_destructor != ffn6_priv_destructor_cb)
+		return NULL;
+
+	return (struct ffn6_priv *)e6->manip.ffn_priv_area;
+}
+
+/*
+ *
+ */
+static u32 ff_tun_extract_6rd_addr(const struct in6_addr *d)
+{
+	u32 a1, a2;
+
+	a1 = ntohl(d->s6_addr32[0] & ~ff.u.sit.s6rd_pmask);
+	a1 <<= ff.u.sit.s6rd_plen;
+
+	a2 = ntohl(d->s6_addr32[1] & ff.u.sit.s6rd_pmask);
+	a2 >>= (32 - ff.u.sit.s6rd_plen);
+	return htonl(a1 | a2);
+}
+
+/*
+ *
+ */
+static void ff_tun_gen_mape_addr(u32 addr, u16 port, struct in6_addr *dest)
+{
+	u32 eabits;
+	u16 psid;
+
+	eabits = ntohl(addr & ff.u.map.ea_addr_mask) << ff.u.map.psid_len;
+	psid = 0;
+	if (ff.u.map.psid_len) {
+		psid = ntohs(port & ff.u.map.ea_port_mask) >>
+			(16 - ff.u.map.psid_len);
+		eabits |= psid;
+	}
+
+	memcpy(dest, &ff.u.map.ipv6_prefix, 8);
+	dest->s6_addr32[1] |= htonl(eabits << ff.u.map.ea_lshift);
+
+	dest->s6_addr32[2] = htonl(ntohl(addr) >> 16);
+	dest->s6_addr32[3] = htonl((ntohl(addr) << 16) | psid);
+}
+
+/*
+ *
+ */
+static bool ff_forward(struct mv643xx_eth_private *rx_mp,
+		       struct mv643xx_eth_private *tx_mp,
+		       struct net_device *rx_dev,
+		       struct net_device *tx_dev,
+		       unsigned int rx_vlan,
+		       unsigned int tx_vlan,
+		       struct rx_desc *rx_desc,
+		       unsigned int cmd_sts,
+		       void *frag,
+		       size_t offset, size_t eth_len)
+{
+	struct net_device_stats *rx_hw_stats;
+	struct net_device_stats *tx_hw_stats;
+	struct ffn_lookup_entry *e;
+	struct ffn6_lookup_entry *e6;
+	struct tx_queue *txq;
+	struct neighbour *neigh;
+	struct nf_conn *ct;
+	struct ethhdr *eth;
+	enum ff_xmit_mode xmit_mode;
+	u32 buf_addr;
+	unsigned int timeout;
+	void *l3_hdr, *l4_hdr;
+	bool l3_is_ipv4, l4_is_tcp;
+	unsigned int l3_plen;
+	unsigned int clean_len;
+	u32 tun_v4_dest;
+	const struct in6_addr *tun_v6_pdest;
+	u16 proto;
+
+	/* make sure we have headroom for the worst case scenario */
+	BUILD_BUG_ON(CONFIG_NETSKBPAD <
+		     (sizeof (struct ipv6hdr) + VLAN_HLEN));
+
+	if (!tx_mp || !rx_dev || !tx_dev)
+		return false;
+
+	/* hardware skip 2 bytes to align IP header */
+	eth = (struct ethhdr *)((uint8_t *)frag + offset + 2);
+	eth_len -= 2;
+
+	/*
+	 * filter only IPv4 & IPv6 packets
+	 */
+	if (rx_vlan) {
+		struct vlan_ethhdr *vhdr;
+
+		if (!pkt_is_vlan(cmd_sts))
+			return false;
+
+		vhdr = (struct vlan_ethhdr *)eth;
+		if (vhdr->h_vlan_TCI != htons(rx_vlan))
+			return false;
+
+		if (!pkt_is_ipv4(cmd_sts)) {
+			if (vhdr->h_vlan_encapsulated_proto !=
+			    htons(ETH_P_IPV6))
+				return false;
+		}
+
+		l3_hdr = vhdr + 1;
+		l3_plen = eth_len - VLAN_ETH_HLEN;
+	} else {
+		if (pkt_is_vlan(cmd_sts))
+			return false;
+
+		if (!pkt_is_ipv4(cmd_sts)) {
+			if (eth->h_proto != htons(ETH_P_IPV6))
+				return false;
+		}
+
+		l3_hdr = eth + 1;
+		l3_plen = eth_len - ETH_HLEN;
+	}
+
+	/* make sure packet is for our mac address */
+	if (memcmp(eth->h_dest, rx_mp->dev->dev_addr, 6)) {
+		return false;
+	}
+
+	l3_is_ipv4 = pkt_is_ipv4(cmd_sts);
+	if (l3_is_ipv4) {
+		struct iphdr *iph;
+		u16 sport, dport;
+		u8 ip_proto;
+
+handle_ipv4:
+		iph = (struct iphdr *)l3_hdr;
+
+		/* lookup IP ffn entry */
+		if (iph->ihl > 5 || (iph->frag_off & htons(IP_MF | IP_OFFSET)))
+			return false;
+
+		if (iph->ttl <= 1)
+			return false;
+
+		ip_proto = iph->protocol;
+		if (ip_proto == IPPROTO_TCP) {
+			struct tcphdr *tcph;
+
+			if (l3_plen < sizeof (*iph) + sizeof (*tcph))
+				return false;
+
+			tcph = (struct tcphdr *)((u8 *)iph + 20);
+			if (tcph->fin ||
+			    tcph->syn ||
+			    tcph->rst ||
+			    !tcph->ack) {
+				return false;
+			}
+
+			sport = tcph->source;
+			dport = tcph->dest;
+			l4_hdr = tcph;
+			l4_is_tcp = true;
+
+		} else if (ip_proto == IPPROTO_UDP) {
+			struct udphdr *udph;
+
+			if (l3_plen < sizeof (*iph) + sizeof (*udph))
+				return false;
+
+			udph = (struct udphdr *)((u8 *)iph + 20);
+			sport = udph->source;
+			dport = udph->dest;
+			l4_hdr = udph;
+			l4_is_tcp = false;
+
+		} else if (ip_proto == IPPROTO_IPV6) {
+			struct ipv6hdr *ip6hdr;
+			u32 ip6rd_daddr;
+
+			if (!ff.tun_ready)
+				return false;
+
+			/* must be for us */
+			if (iph->daddr != ff.u.sit.src)
+				return false;
+
+			/* check len */
+			if (l3_plen < sizeof (struct iphdr) +
+			    sizeof (struct ipv6hdr))
+				return false;
+
+			ip6hdr = (struct ipv6hdr *)(iph + 1);
+
+			/* must belong to 6rd prefix */
+			if ((ip6hdr->daddr.s6_addr32[0] &
+			     ff.u.sit.s6rd_pmask) != ff.u.sit.s6rd_prefix)
+				return false;
+
+			/* 6rd address */
+			ip6rd_daddr = ff_tun_extract_6rd_addr(&ip6hdr->daddr);
+			if (ip6rd_daddr != ff.u.sit.src)
+				return false;
+
+			/* TODO: should check for spoofing here */
+			l3_hdr = ip6hdr;
+			l3_plen -= 20;
+			l3_is_ipv4 = false;
+			goto handle_ipv6;
+
+		} else
+			return false;
+
+		e = __ffn_get(iph->saddr, iph->daddr,
+			      sport, dport, l4_is_tcp);
+		if (!e)
+			return false;
+
+		if (e->manip.dst->obsolete > 0)
+			return false;
+
+		ct = e->manip.ct;
+
+		/* only fast forward TCP connections in established state */
+		if (l4_is_tcp &&
+		    ct->proto.tcp.state != TCP_CONNTRACK_ESTABLISHED)
+			return false;
+
+		/* find out if the packet is to be sent as-is or
+		 * tunneled */
+		if (ff.tun_dev && e->manip.dst->dev == ff.tun_dev) {
+			struct ffn_priv *ffn_priv;
+			struct dst_entry *v6_dst;
+			struct in6_addr *pdest, *nexthop, dest;
+			struct rt6_info *rt6;
+
+			/* IPv4 tunneled into MAP-E device */
+			if (!ff.tun_ready) {
+				return false;
+			}
+
+			if (l3_plen > ff.tun_mtu)
+				return false;
+
+			/* lookup ipv6 route cache */
+			ffn_priv = ffn_get_ro_priv(e);
+			if (ffn_priv) {
+				if (ffn_priv->tun_dst->obsolete < 0) {
+					/* valid route found */
+					v6_dst = ffn_priv->tun_dst;
+					pdest = &ffn_priv->tun_dest_ip6;
+					goto cached_ipv6_route;
+				}
+
+				ffn_priv_release(ffn_priv);
+				e->manip.priv_destructor = NULL;
+			}
+
+			/* cache miss, compute IPv6 destination */
+			if ((iph->daddr & ff.u.map.ipv4_pmask) ==
+			    ff.u.map.ipv4_prefix) {
+				/* compute dest using FMR */
+				ff_tun_gen_mape_addr(iph->daddr, dport, &dest);
+				pdest = &dest;
+			} else {
+				/* next hop is BR */
+				pdest = &ff.u.map.br;
+			}
+
+			/* v6 route lookup */
+			rt6 = rt6_lookup(&init_net, pdest, NULL, 0, 0);
+			if (!rt6)
+				return false;
+
+			ffn_priv = ffn_get_rw_priv(e);
+			if (!ffn_priv)
+				return false;
+
+			/* cache this inside FFN private area */
+			ffn_priv->tun_dst = (struct dst_entry *)rt6;
+			memcpy(&ffn_priv->tun_dest_ip6, pdest, 16);
+			e->manip.priv_destructor = ffn_priv_destructor_cb;
+
+			v6_dst = (struct dst_entry *)rt6;
+
+cached_ipv6_route:
+			if (v6_dst->dev != tx_dev) {
+				return false;
+			}
+
+			/* is the neighboor ready ? */
+			rt6 = (struct rt6_info *)v6_dst;
+			nexthop = rt6_nexthop(rt6, pdest);
+			if (!nexthop) {
+				return false;
+			}
+
+			neigh = __ipv6_neigh_lookup_noref(tx_dev, nexthop);
+			if (!neigh) {
+				return false;
+			}
+
+			xmit_mode = FF_XMIT_IPV4_IN_IPV6;
+			tun_v6_pdest = &ffn_priv->tun_dest_ip6;
+
+		} else if (e->manip.dst->dev == tx_dev) {
+			const struct rtable *rt;
+			u32 nexthop;
+
+			/* is the neighboor ready ? */
+			rt = (const struct rtable *)e->manip.dst;
+
+			nexthop = (__force u32)rt_nexthop(rt, e->manip.new_dip);
+			neigh = __ipv4_neigh_lookup_noref(tx_dev, nexthop);
+			if (!neigh) {
+				return false;
+			}
+
+			xmit_mode = FF_XMIT_IPV4;
+		} else
+			return false;
+
+	} else {
+		struct ipv6hdr *ip6hdr;
+		u16 sport, dport;
+		u8 ip_proto;
+
+handle_ipv6:
+		ip6hdr = (struct ipv6hdr *)l3_hdr;
+
+		if (ip6hdr->hop_limit <= 1 || !ip6hdr->payload_len)
+			return false;
+
+		if (ntohs(ip6hdr->payload_len) > l3_plen)
+			return false;
+
+		ip_proto = ip6hdr->nexthdr;
+
+		if (ip_proto == IPPROTO_TCP) {
+			struct tcphdr *tcph;
+
+			if (l3_plen < sizeof (*ip6hdr) + sizeof (*tcph))
+				return false;
+
+			tcph = (struct tcphdr *)((u8 *)ip6hdr +
+						 sizeof (*ip6hdr));
+
+			if (tcph->fin ||
+			    tcph->syn ||
+			    tcph->rst ||
+			    !tcph->ack) {
+				return false;
+			}
+
+			sport = tcph->source;
+			dport = tcph->dest;
+			l4_hdr = tcph;
+			l4_is_tcp = true;
+
+		} else if (ip_proto == IPPROTO_UDP) {
+			struct udphdr *udph;
+
+			if (l3_plen < sizeof (*ip6hdr) + sizeof (*udph))
+				return false;
+
+			udph = (struct udphdr *)((u8 *)ip6hdr +
+						 sizeof (*ip6hdr));
+			sport = udph->source;
+			dport = udph->dest;
+			l4_hdr = udph;
+			l4_is_tcp = false;
+
+		} else if (ip_proto == IPPROTO_IPIP) {
+			struct iphdr *iph;
+
+			if (!ff.tun_ready)
+				return false;
+
+			/* must be for us */
+			if (memcmp(&ip6hdr->daddr, &ff.u.map.src, 16))
+				return false;
+
+			/* check len */
+			if (l3_plen < sizeof (struct iphdr) +
+			    sizeof (struct ipv6hdr))
+				return false;
+
+			iph = (struct iphdr *)(ip6hdr + 1);
+
+			/* does it come from BR ? */
+			if (memcmp(&ip6hdr->saddr, &ff.u.map.br, 16)) {
+				struct in6_addr exp_src_addr;
+
+				/* no, check FMR for spoofing */
+				if (!ff.u.map.ipv4_prefix)
+					return false;
+
+				/* check up to PSID to reduce lookup
+				 * depth */
+				ff_tun_gen_mape_addr(iph->saddr, 0,
+						     &exp_src_addr);
+				if (!ipv6_prefix_equal(&ip6hdr->saddr,
+						       &exp_src_addr,
+						       ff.u.map.ipv6_plen +
+						       ff.u.map.ipv4_plen))
+					return false;
+			}
+
+			l3_hdr = iph;
+			l3_plen -= sizeof (*ip6hdr);
+			l3_is_ipv4 = true;
+			goto handle_ipv4;
+
+		} else
+			return false;
+
+		e6 = __ffn6_get(ip6hdr->saddr.s6_addr32,
+				ip6hdr->daddr.s6_addr32,
+				sport, dport, l4_is_tcp);
+
+		if (!e6) {
+			return false;
+		}
+
+		if (e6->manip.dst->obsolete > 0) {
+			return false;
+		}
+
+		ct = e6->manip.ct;
+
+		/* only fast forward TCP connections in established state */
+		if (l4_is_tcp &&
+		    ct->proto.tcp.state != TCP_CONNTRACK_ESTABLISHED) {
+			return false;
+		}
+
+		/* find out if the packet is to be sent as-is or
+		 * tunneled */
+		if (ff.tun_dev && e6->manip.dst->dev == ff.tun_dev) {
+			struct ffn6_priv *ffn6_priv;
+			struct dst_entry *v4_dst;
+			struct flowi4 fl4;
+			struct rtable *rt;
+			u32 dest, nexthop;
+
+			/* IPv6 tunneled into SIT device using 6rd */
+			if (!ff.tun_ready) {
+				return false;
+			}
+
+			if (l3_plen > ff.tun_mtu)
+				return false;
+
+			/* lookup ipv4 route cache */
+			ffn6_priv = ffn6_get_ro_priv(e6);
+			if (ffn6_priv) {
+				if (!ffn6_priv->tun_dst->obsolete) {
+					/* valid route found */
+					v4_dst = ffn6_priv->tun_dst;
+					dest = ffn6_priv->tun_dest_ip;
+					goto cached_ipv4_route;
+				}
+
+				ffn6_priv_release(ffn6_priv);
+				e6->manip.priv_destructor = NULL;
+			}
+
+			/* cache miss, compute IPv4 destination */
+			if ((ip6hdr->daddr.s6_addr32[0] &
+			     ff.u.sit.s6rd_pmask) == ff.u.sit.s6rd_prefix) {
+				/* next hop via prefix */
+				dest = ff_tun_extract_6rd_addr(&ip6hdr->daddr);
+			} else {
+				struct in6_addr *nh6;
+				struct rt6_info *rt6;
+
+				/* next hop via route */
+				rt6 = (struct rt6_info *)e6->manip.dst;
+				nh6 = rt6_nexthop(rt6,
+				      (struct in6_addr *)e6->manip.new_dip);
+				if (!nh6) {
+					return false;
+				}
+
+				/* should be a v4 mapped */
+				if (nh6->s6_addr32[0] != 0 ||
+				    nh6->s6_addr32[1] != 0 ||
+				    nh6->s6_addr32[2] != 0) {
+					return false;
+				}
+
+				dest = nh6->s6_addr32[3];
+			}
+
+			/* v4 route lookup */
+			rt = ip_route_output_ports(&init_net, &fl4, NULL,
+						   dest, ff.u.sit.src,
+						   0, 0,
+						   IPPROTO_IPV6, 0,
+						   0);
+			if (IS_ERR(rt) ||
+			    rt->rt_type != RTN_UNICAST)
+				return false;
+
+			ffn6_priv = ffn6_get_rw_priv(e6);
+			if (!ffn6_priv)
+				return false;
+
+			/* cache this inside FFN private area */
+			ffn6_priv->tun_dst = (struct dst_entry *)rt;
+			ffn6_priv->tun_dest_ip = dest;
+			e6->manip.priv_destructor = ffn6_priv_destructor_cb;
+
+			v4_dst = (struct dst_entry *)rt;
+
+cached_ipv4_route:
+			if (v4_dst->dev != tx_dev) {
+				return false;
+			}
+
+			/* is the neighboor ready ? */
+			rt = (struct rtable *)v4_dst;
+			nexthop = (__force u32)rt_nexthop(rt, dest);
+			neigh = __ipv4_neigh_lookup_noref(tx_dev, nexthop);
+			if (!neigh) {
+				return false;
+			}
+
+			tun_v4_dest = dest;
+			xmit_mode = FF_XMIT_IPV6_IN_IPV4;
+
+		} else if (e6->manip.dst->dev == tx_dev) {
+			struct in6_addr *nexthop;
+			struct rt6_info *rt6;
+
+			/* is the neighboor ready ? */
+			rt6 = (struct rt6_info *)e6->manip.dst;
+
+			nexthop = rt6_nexthop(rt6,
+				      (struct in6_addr *)e6->manip.new_dip);
+			if (!nexthop)
+				return false;
+
+			neigh = __ipv6_neigh_lookup_noref(tx_dev, nexthop);
+			if (!neigh) {
+				return false;
+			}
+
+			xmit_mode = FF_XMIT_IPV6;
+		} else
+			return false;
+	}
+
+	if (!(neigh->nud_state & NUD_VALID)) {
+		return false;
+	}
+
+	/* is destination on correct tx bridge port ? */
+	if (is_bridge_dev(tx_dev)) {
+		struct net_bridge_port *p = br_port_get_rcu(tx_mp->dev);
+		struct net_bridge_fdb_entry *fdb;
+
+		fdb = br_fdb_find(p->br, neigh->ha, 0);
+		if (!fdb)
+			return false;
+
+		if (fdb->dst != p)
+			return false;
+	}
+
+	txq = tx_mp->ff_txq;
+	if (is_bridge_dev(rx_dev)) {
+		struct net_bridge *br = netdev_priv(rx_dev);
+		struct net_bridge_port *p;
+		struct pcpu_sw_netstats *stats;
+
+		/* if packet comes from a bridge, make sure we are
+		 * allowed to ingress it */
+		p = br_port_get_rcu(rx_mp->dev);
+		if (p->state != BR_STATE_FORWARDING) {
+			return false;
+		}
+
+		/* refresh FDB entry for this source */
+		if (!br_fdb_update_only(br, p, eth->h_source)) {
+			return false;
+		}
+
+		stats = this_cpu_ptr(br->stats);
+		stats->rx_packets++;
+		stats->rx_bytes += eth_len;
+
+	} else if (rx_vlan) {
+		struct vlan_dev_priv *vlan = vlan_dev_priv(rx_dev);
+		struct vlan_pcpu_stats *stats;
+		stats = this_cpu_ptr(vlan->vlan_pcpu_stats);
+		stats->rx_packets++;
+		stats->rx_bytes += eth_len;
+	} else {
+		rx_dev->stats.rx_packets++;
+		rx_dev->stats.rx_bytes += eth_len;
+	}
+
+	rx_hw_stats = &rx_mp->dev->stats;
+	rx_hw_stats->rx_bytes += eth_len;
+	rx_hw_stats->rx_packets++;
+
+	/* do we have room in the tx queue ? */
+	if (txq->tx_desc_count == txq->tx_ring_size &&
+	    !ff_tx_queue_can_reclaim(txq)) {
+		/* just rearm descriptor and fake success */
+		rx_desc->cmd_sts = BUFFER_OWNED_BY_DMA | TX_ENABLE_INTERRUPT;
+		txq_enable(txq);
+		return true;
+	}
+
+	/* remember RX desc hw address before we reload it and point
+	 * if back to frag hw address */
+	buf_addr = rx_desc->buf_ptr;
+	buf_addr -= offset;
+
+	/* can we allocate a new fragment to replace the descriptor we
+	 * are about to use ? */
+	if (rx_desc_refill(rx_mp, rx_desc, true)) {
+		/* just rearm descriptor and fake success */
+		rx_desc->cmd_sts = BUFFER_OWNED_BY_DMA | RX_ENABLE_INTERRUPT;
+		return true;
+	}
+
+	if (l4_is_tcp) {
+		/* don't try to track window anymore on this
+		 * connection */
+		ct->proto.tcp.no_window_track = 1;
+	}
+
+	/* alter l3 & l4 content if needed */
+	if (l3_is_ipv4) {
+		struct iphdr *iph = (struct iphdr *)l3_hdr;
+
+		if (e->manip.alter) {
+			if (l4_is_tcp) {
+				struct tcphdr *tcph = (struct tcphdr *)l4_hdr;
+				tcph->source = e->manip.new_sport;
+				tcph->dest = e->manip.new_dport;
+				tcph->check = csum16_sub(tcph->check,
+						 e->manip.l4_adjustment);
+			} else {
+				struct udphdr *udph = (struct udphdr *)l4_hdr;
+				udph->source = e->manip.new_sport;
+				udph->dest = e->manip.new_dport;
+				if (udph->check) {
+					u16 tcheck;
+
+					tcheck = csum16_sub(udph->check,
+						    e->manip.l4_adjustment);
+					udph->check = tcheck ? tcheck : 0xffff;
+				}
+			}
+
+			iph->saddr = e->manip.new_sip;
+			iph->daddr = e->manip.new_dip;
+		}
+
+		iph->ttl--;
+		iph->check = csum16_sub(iph->check,
+					e->manip.ip_adjustment);
+
+	} else {
+		struct ipv6hdr *ip6hdr = (struct ipv6hdr *)l3_hdr;
+
+		if (e6->manip.alter) {
+			if (l4_is_tcp) {
+				struct tcphdr *tcph = (struct tcphdr *)l4_hdr;
+				tcph->source = e6->manip.new_sport;
+				tcph->dest = e6->manip.new_dport;
+				tcph->check = csum16_sub(tcph->check,
+							 e6->manip.adjustment);
+			} else {
+				struct udphdr *udph = (struct udphdr *)l4_hdr;
+				udph->source = e6->manip.new_sport;
+				udph->dest = e6->manip.new_dport;
+
+				if (udph->check) {
+					u16 tcheck;
+
+					tcheck = csum16_sub(udph->check,
+						    e6->manip.adjustment);
+					udph->check = tcheck ? tcheck : 0xffff;
+				}
+			}
+
+			memcpy(ip6hdr->saddr.s6_addr32, e6->manip.new_sip, 16);
+			memcpy(ip6hdr->daddr.s6_addr32, e6->manip.new_dip, 16);
+		}
+
+		ip6hdr->hop_limit--;
+	}
+
+	/* packet is ready to xmit */
+	switch (xmit_mode) {
+	case FF_XMIT_IPV4:
+		clean_len = sizeof (struct iphdr);
+		proto = ETH_P_IP;
+		break;
+
+	case FF_XMIT_IPV6:
+		clean_len = sizeof (struct ipv6hdr);
+		proto = ETH_P_IPV6;
+		break;
+
+	case FF_XMIT_IPV6_IN_IPV4:
+	{
+		struct iphdr *tun_hdr;
+		/* prepend IPv4 */
+		tun_hdr = (struct iphdr *)((u8 *)l3_hdr - sizeof (*tun_hdr));
+		tun_hdr->ihl = 5;
+		tun_hdr->version = 4;
+		tun_hdr->tos = 0;
+		tun_hdr->tot_len = htons(l3_plen + sizeof (*tun_hdr));
+		tun_hdr->id = 0;
+		tun_hdr->frag_off = 0;
+		tun_hdr->ttl = 64;
+		tun_hdr->protocol = IPPROTO_IPV6;
+		tun_hdr->saddr = ff.u.sit.src;
+		tun_hdr->daddr = tun_v4_dest;
+
+		l3_hdr = (u8 *)tun_hdr;
+		l3_plen += sizeof (*tun_hdr);
+
+		clean_len = sizeof (struct iphdr) + sizeof (struct ipv6hdr);
+		proto = ETH_P_IP;
+		break;
+	}
+
+	case FF_XMIT_IPV4_IN_IPV6:
+	{
+		struct ipv6hdr *tun_6hdr;
+
+		/* prepend IPv6 */
+		tun_6hdr = (struct ipv6hdr *)((u8 *)l3_hdr - sizeof (*tun_6hdr));
+		tun_6hdr->version = 6;
+		tun_6hdr->priority = 0;
+		memset(tun_6hdr->flow_lbl, 0, sizeof (tun_6hdr->flow_lbl));
+		tun_6hdr->payload_len = htons(l3_plen);
+		tun_6hdr->nexthdr = IPPROTO_IPIP;
+		tun_6hdr->hop_limit = 64;
+		tun_6hdr->saddr = ff.u.map.src;
+		tun_6hdr->daddr = *tun_v6_pdest;
+
+		l3_hdr = (u8 *)tun_6hdr;
+		l3_plen += sizeof (*tun_6hdr);
+
+		clean_len = sizeof (struct ipv6hdr) + sizeof (struct iphdr);
+		proto = ETH_P_IPV6;
+		break;
+	}
+	}
+
+	if (l4_is_tcp)
+		clean_len += sizeof (struct tcphdr);
+	else
+		clean_len += sizeof (struct udphdr);
+
+	/* add ethernet header */
+	if (tx_vlan) {
+		struct vlan_ethhdr *vhdr;
+
+		vhdr = (struct vlan_ethhdr *)((u8 *)l3_hdr - VLAN_ETH_HLEN);
+		memcpy(vhdr->h_dest, neigh->ha, 6);
+		memcpy(vhdr->h_source, rx_mp->dev->dev_addr, 6);
+		vhdr->h_vlan_proto = htons(ETH_P_8021Q);
+		vhdr->h_vlan_TCI = htons(836);
+		vhdr->h_vlan_encapsulated_proto = htons(proto);
+
+		eth = (struct ethhdr *)vhdr;
+		eth_len = l3_plen + VLAN_ETH_HLEN;
+		clean_len += VLAN_ETH_HLEN;
+	} else {
+		eth = (struct ethhdr *)((u8 *)l3_hdr - ETH_HLEN);
+		memcpy(eth->h_dest, neigh->ha, 6);
+		memcpy(eth->h_source, rx_mp->dev->dev_addr, 6);
+		eth->h_proto = htons(proto);
+		eth_len = l3_plen + ETH_HLEN;
+		clean_len += ETH_HLEN;
+	}
+
+	if (ff_send(txq,
+		    buf_addr + (void *)eth - frag,
+		    frag, rx_mp->pkt_size,
+		    eth_len,
+		    clean_len,
+		    (proto == ETH_P_IP),
+		    (xmit_mode == FF_XMIT_IPV4),
+		    l4_is_tcp,
+		    tx_vlan)) {
+		skb_free_frag(frag);
+		return true;
+	}
+
+	if (is_bridge_dev(tx_dev)) {
+		struct net_bridge *br = netdev_priv(tx_dev);
+		struct pcpu_sw_netstats *stats;
+		stats = this_cpu_ptr(br->stats);
+		stats->tx_packets++;
+		stats->tx_bytes += eth_len;
+	} else if (tx_vlan) {
+		struct vlan_dev_priv *vlan = vlan_dev_priv(tx_dev);
+		struct vlan_pcpu_stats *stats;
+		stats = this_cpu_ptr(vlan->vlan_pcpu_stats);
+		stats->tx_packets++;
+		stats->tx_bytes += eth_len;
+	} else {
+		tx_dev->stats.tx_packets++;
+		tx_dev->stats.tx_bytes += eth_len;
+	}
+
+	tx_hw_stats = &tx_mp->dev->stats;
+	tx_hw_stats->tx_bytes += eth_len;
+	tx_hw_stats->tx_packets++;
+
+	/* refresh conntrack */
+	if (l4_is_tcp)
+		timeout = HZ * 3600 * 24 * 5;
+	else
+		timeout = HZ * 180;
+
+	if (ct->timeout.expires - ff.jiffies < timeout - 10 * HZ) {
+		unsigned long newtime = ff.jiffies + timeout;
+		mod_timer_pending(&ct->timeout, newtime);
+	}
+
+	return true;
+}
+
+/*
+ *
+ */
+static bool ff_receive(struct mv643xx_eth_private *mp,
+		       struct rx_desc *rx_desc,
+		       unsigned int cmd_sts,
+		       void *frag,
+		       size_t offset, size_t dlen)
+{
+#ifdef CONFIG_FBXBRIDGE
+	if (mp->dev->fbx_bridge_maybe_port)
+		return false;
+#endif
+
+	if (!ff_enabled)
+		return false;
+
+	/*
+	 * GWv1
+	 */
+	if (ff_mode == 1) {
+		/*
+		 * LAN => WAN
+		 * [eth0 (untagged)] => [br0] => IPV4 => [eth1.836]
+		 *
+		 * WAN => LAN
+		 * [eth1.836] => IPV4 => [br0] => [eth0]
+		 */
+		if (mp->shared->unit == 0)
+			return ff_forward(mp, mp_by_unit[1],
+					  ff.lan_dev,
+					  ff.wan_dev,
+					  0, 836,
+					  rx_desc,
+					  cmd_sts,
+					  frag, offset, dlen);
+
+		if (mp->shared->unit == 1)
+			return ff_forward(mp, mp_by_unit[0],
+					  ff.wan_dev,
+					  ff.lan_dev,
+					  836, 0,
+					  rx_desc,
+					  cmd_sts,
+					  frag, offset, dlen);
+	}
+
+	/*
+	 * GWv2
+	 */
+	if (ff_mode == 2) {
+		/*
+		 * LAN => WAN
+		 * [eth0 (untagged)] => [br0] => IPV4 => [eth0.836]
+		 *
+		 * WAN => LAN
+		 * [eth0.836] => IPV4 => [br0] => [eth0]
+		 */
+		if (mp->shared->unit != 0)
+			return false;
+
+		if (!pkt_is_vlan(cmd_sts))
+			return ff_forward(mp, mp,
+					  ff.lan_dev,
+					  ff.wan_dev,
+					  0, 836,
+					  rx_desc,
+					  cmd_sts,
+					  frag, offset, dlen);
+		else
+			return ff_forward(mp, mp,
+					  ff.wan_dev,
+					  ff.lan_dev,
+					  836, 0,
+					  rx_desc,
+					  cmd_sts,
+					  frag, offset, dlen);
+	}
+
+	return false;
+}
+
+/*
+ *
+ */
+static ssize_t ff_show_enabled(struct device *dev,
+			       struct device_attribute *attr,
+			       char *buf)
+{
+	return sprintf(buf, "%u\n", ff_enabled);
+}
+
+static ssize_t ff_store_enabled(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t len)
+{
+	unsigned long val;
+
+	if (kstrtoul(buf, 10, &val))
+		return -EINVAL;
+
+	if (ff_enabled == val)
+		return len;
+
+	printk(KERN_NOTICE "ff: fastpath now %s\n",
+	       val ? "enabled" : "disabled");
+	ff_enabled = val;
+	return len;
+}
+
+static struct device_attribute dev_attr_ff = {
+	.attr = { .name = "ff_enabled", .mode = (S_IRUGO | S_IWUSR) },
+	.show = ff_show_enabled,
+	.store = ff_store_enabled,
+};
+
+/*
+ *
+ */
+static ssize_t ff_show_tun_dev(struct device *dev,
+			       struct device_attribute *attr,
+			       char *buf)
+{
+	return sprintf(buf, "%u\n", ff_enabled);
+}
+
+static ssize_t ff_store_tun_dev(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t len)
+{
+	if (!len || buf[0] == '\n') {
+		ff.tun_dev_name[0] = 0;
+		ff_tun_release();
+		printk(KERN_NOTICE "ff: tun dev unset\n");
+		return len;
+	}
+
+	strncpy(ff.tun_dev_name, buf, len);
+	strim(ff.tun_dev_name);
+	printk(KERN_NOTICE "ff: tun dev set to %s\n", ff.tun_dev_name);
+	ff_tun_capture();
+	return len;
+}
+
+static struct device_attribute dev_attr_tun = {
+	.attr = { .name = "ff_tun_dev", .mode = (S_IRUGO | S_IWUSR) },
+	.show = ff_show_tun_dev,
+	.store = ff_store_tun_dev,
+};
+
+static struct ff_dev gw_lan = {
+	.desc			= "lan",
+	.unit			= 0,
+	.bridge_member		= true,
+	.pvirt_dev		= &ff.lan_dev,
+};
+
+static struct ff_dev gwv1_wan = {
+	.desc			= "wan",
+	.unit			= 1,
+	.vlan			= 836,
+	.pvirt_dev		= &ff.wan_dev,
+};
+
+static struct ff_dev gwv2_wan = {
+	.desc			= "wan",
+	.unit			= 0,
+	.vlan			= 836,
+	.pvirt_dev		= &ff.wan_dev,
+};
+
+static void ff_init(struct device *dev)
+{
+	static bool done;
+
+	if (done)
+		return;
+
+	device_create_file(dev, &dev_attr_ff);
+	device_create_file(dev, &dev_attr_tun);
+
+	printk(KERN_DEBUG "ff_init: mode %u\n", ff_mode);
+	switch (ff_mode) {
+	case 1:
+		list_add(&gw_lan.next, &ff_devs);
+		list_add(&gwv1_wan.next, &ff_devs);
+		break;
+
+	case 2:
+		list_add(&gw_lan.next, &ff_devs);
+		list_add(&gwv2_wan.next, &ff_devs);
+		break;
+	}
+
+	done = true;
+}
+#endif
+
+static void rxq_receive_packet(struct mv643xx_eth_private *mp,
+			       struct rx_queue *rxq,
+			       unsigned int cmd_sts,
+			       struct sk_buff *skb)
+{
+	struct net_device_stats *stats = &mp->dev->stats;
+
+	if (cmd_sts & LAYER_4_CHECKSUM_OK)
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
+
+	rxq->rx_packets++;
+	stats->rx_packets++;
+	stats->rx_bytes += skb->len + ETH_FCS_LEN;
+
+#ifdef CONFIG_FBXBRIDGE
+	if (mp->dev->fbx_bridge_maybe_port &&
+	    pkt_is_vlan(cmd_sts) &&
+	    pkt_is_ipv4(cmd_sts)) {
+
+		if (pkt_is_tcp4(cmd_sts)) {
+			if (__fbxbridge_fp_in_vlan_tcp4(mp->dev, skb))
+				return;
+		} else if (pkt_is_udp4(cmd_sts)) {
+			if (__fbxbridge_fp_in_vlan_udp4(mp->dev, skb))
+				return;
+		}
+	}
+#endif
+
+	skb->protocol = eth_type_trans(skb, mp->dev);
+
+	if (pkt_is_ipv4(cmd_sts) &&
+	    (pkt_is_udp4(cmd_sts) || pkt_is_tcp4(cmd_sts)))
+		napi_gro_receive(&mp->napi, skb);
+	else
+		netif_receive_skb(skb);
+}
+
 static int rxq_process(struct rx_queue *rxq, int budget)
 {
 	struct mv643xx_eth_private *mp = rxq_to_mp(rxq);
 	struct net_device_stats *stats = &mp->dev->stats;
-	int rx;
+	int rx_done;
 
-	rx = 0;
-	while (rx < budget && rxq->rx_desc_count) {
+	rx_done = 0;
+	while (rx_done < budget) {
 		struct rx_desc *rx_desc;
-		unsigned int cmd_sts;
 		struct sk_buff *skb;
+		unsigned int cmd_sts;
+		void *frag;
 		u16 byte_cnt;
+		int ret;
 
 		rx_desc = &rxq->rx_desc_area[rxq->rx_curr_desc];
 
 		cmd_sts = rx_desc->cmd_sts;
 		if (cmd_sts & BUFFER_OWNED_BY_DMA)
 			break;
-		rmb();
 
-		skb = rxq->rx_skb[rxq->rx_curr_desc];
-		rxq->rx_skb[rxq->rx_curr_desc] = NULL;
-
+		rx_done++;
 		rxq->rx_curr_desc++;
 		if (rxq->rx_curr_desc == rxq->rx_ring_size)
 			rxq->rx_curr_desc = 0;
-
-		dma_unmap_single(mp->dev->dev.parent, rx_desc->buf_ptr,
-				 rx_desc->buf_size, DMA_FROM_DEVICE);
-		rxq->rx_desc_count--;
-		rx++;
-
-		mp->work_rx_refill |= 1 << rxq->index;
-
-		byte_cnt = rx_desc->byte_cnt;
-
-		/*
-		 * Update statistics.
-		 *
-		 * Note that the descriptor byte count includes 2 dummy
-		 * bytes automatically inserted by the hardware at the
-		 * start of the packet (which we don't count), and a 4
-		 * byte CRC at the end of the packet (which we do count).
-		 */
-		stats->rx_packets++;
-		stats->rx_bytes += byte_cnt - 2;
 
 		/*
 		 * In case we received a packet without first / last bits
@@ -571,24 +2396,77 @@ static int rxq_process(struct rx_queue *rxq, int budget)
 		 * to be dropped.
 		 */
 		if ((cmd_sts & (RX_FIRST_DESC | RX_LAST_DESC | ERROR_SUMMARY))
-			!= (RX_FIRST_DESC | RX_LAST_DESC))
-			goto err;
+		    != (RX_FIRST_DESC | RX_LAST_DESC))
+			goto err_rearm;
 
-		/*
-		 * The -4 is for the CRC in the trailer of the
-		 * received packet
-		 */
-		skb_put(skb, byte_cnt - 2 - 4);
+		rmb();
+		frag = (void *)rx_desc->cookie;
+		byte_cnt = rx_desc->byte_cnt;
 
-		if (cmd_sts & LAYER_4_CHECKSUM_OK)
-			skb->ip_summed = CHECKSUM_UNNECESSARY;
-		skb->protocol = eth_type_trans(skb, mp->dev);
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+		if (ff_receive(mp, rx_desc, cmd_sts,
+			       frag, RX_OFFSET,
+			       byte_cnt - ETH_FCS_LEN)) {
+			rxq->rx_packets++;
+			continue;
+		}
+#endif
 
-		napi_gro_receive(&mp->napi, skb);
+		if (byte_cnt <= COPY_BREAK_SIZE) {
+			/* better copy a small frame and not unmap the
+			 * DMA region */
+			skb = netdev_alloc_skb_ip_align(mp->dev, byte_cnt);
+			if (unlikely(!skb))
+				goto err_rearm;
 
+			dma_sync_single_range_for_cpu(mp->dev->dev.parent,
+						      rx_desc->buf_ptr,
+						      0,
+						      byte_cnt,
+						      DMA_FROM_DEVICE);
+
+			memcpy(skb_put(skb, byte_cnt - 2 - ETH_FCS_LEN),
+			       frag + RX_OFFSET + 2,
+			       byte_cnt - 2 - ETH_FCS_LEN);
+
+			dma_sync_single_range_for_device(mp->dev->dev.parent,
+							 rx_desc->buf_ptr,
+							 0,
+							 byte_cnt,
+							 DMA_FROM_DEVICE);
+
+			/* rearm descriptor */
+			rx_desc->cmd_sts = BUFFER_OWNED_BY_DMA |
+				RX_ENABLE_INTERRUPT;
+
+			rxq_receive_packet(mp, rxq, cmd_sts, skb);
+			continue;
+		}
+
+                ret = rx_desc_refill(mp, rx_desc, true);
+		if (ret) {
+			netdev_err(mp->dev, "oom while refill\n");
+			goto err_rearm;
+		}
+
+		/* descriptor is re-armed now */
+
+		skb = build_skb(frag, mp->frag_size > PAGE_SIZE ?
+				0 : mp->frag_size);
+		if (!skb) {
+			mv643xx_eth_frag_free(mp, frag);
+			stats->rx_dropped++;
+			continue;
+		}
+
+		/* add NET_SKB_PAD + skip 2 bytes of hardware align */
+		skb_reserve(skb, RX_OFFSET + 2);
+		skb_put(skb, byte_cnt - 2 - ETH_FCS_LEN);
+
+		rxq_receive_packet(mp, rxq, cmd_sts, skb);
 		continue;
 
-err:
+err_rearm:
 		stats->rx_dropped++;
 
 		if ((cmd_sts & (RX_FIRST_DESC | RX_LAST_DESC)) !=
@@ -598,72 +2476,31 @@ err:
 					   "received packet spanning multiple descriptors\n");
 		}
 
-		if (cmd_sts & ERROR_SUMMARY)
+		if (cmd_sts & ERROR_SUMMARY) {
 			stats->rx_errors++;
-
-		dev_kfree_skb(skb);
+			if (cmd_sts & RX_FIRST_DESC) {
+				switch (cmd_sts & ERROR_CODE_MASK) {
+				case ERROR_CODE_RX_MAX_LENGTH:
+					stats->rx_length_errors++;
+					break;
+				case ERROR_CODE_RX_CRC:
+					stats->rx_crc_errors++;
+					break;
+				case ERROR_CODE_RX_OVERRUN:
+					stats->rx_fifo_errors++;
+					break;
 	}
-
-	if (rx < budget)
-		mp->work_rx &= ~(1 << rxq->index);
-
-	return rx;
 }
-
-static int rxq_refill(struct rx_queue *rxq, int budget)
-{
-	struct mv643xx_eth_private *mp = rxq_to_mp(rxq);
-	int refilled;
-
-	refilled = 0;
-	while (refilled < budget && rxq->rx_desc_count < rxq->rx_ring_size) {
-		struct sk_buff *skb;
-		int rx;
-		struct rx_desc *rx_desc;
-		int size;
-
-		skb = netdev_alloc_skb(mp->dev, mp->skb_size);
-
-		if (skb == NULL) {
-			mp->oom = 1;
-			goto oom;
 		}
 
-		if (SKB_DMA_REALIGN)
-			skb_reserve(skb, SKB_DMA_REALIGN);
-
-		refilled++;
-		rxq->rx_desc_count++;
-
-		rx = rxq->rx_used_desc++;
-		if (rxq->rx_used_desc == rxq->rx_ring_size)
-			rxq->rx_used_desc = 0;
-
-		rx_desc = rxq->rx_desc_area + rx;
-
-		size = skb_end_pointer(skb) - skb->data;
-		rx_desc->buf_ptr = dma_map_single(mp->dev->dev.parent,
-						  skb->data, size,
-						  DMA_FROM_DEVICE);
-		rx_desc->buf_size = size;
-		rxq->rx_skb[rx] = skb;
-		wmb();
+		/* rearm descriptor */
 		rx_desc->cmd_sts = BUFFER_OWNED_BY_DMA | RX_ENABLE_INTERRUPT;
-		wmb();
-
-		/*
-		 * The hardware automatically prepends 2 bytes of
-		 * dummy data to each received packet, so that the
-		 * IP header ends up 16-byte aligned.
-		 */
-		skb_reserve(skb, 2);
 	}
 
-	if (refilled < budget)
-		mp->work_rx_refill &= ~(1 << rxq->index);
+	if (rx_done < budget)
+		mp->work_rx &= ~(1 << rxq->index);
 
-oom:
-	return refilled;
+	return rx_done;
 }
 
 
@@ -895,8 +2732,6 @@ static int txq_submit_tso(struct tx_queue *txq, struct sk_buff *skb,
 	/* clear TX_END status */
 	mp->work_tx_end &= ~(1 << txq->index);
 
-	/* ensure all descriptors are written before poking hardware */
-	wmb();
 	txq_enable(txq);
 	txq->tx_desc_count += desc_count;
 	return 0;
@@ -954,7 +2789,7 @@ static int txq_submit_skb(struct tx_queue *txq, struct sk_buff *skb,
 	struct tx_desc *desc;
 	u32 cmd_sts;
 	u16 l4i_chk;
-	int length, ret;
+	int maplen, length, ret;
 
 	cmd_sts = 0;
 	l4i_chk = 0;
@@ -984,10 +2819,16 @@ static int txq_submit_skb(struct tx_queue *txq, struct sk_buff *skb,
 		length = skb->len;
 	}
 
+	maplen = length;
+#ifdef CONFIG_FBXBRIDGE
+	if (skb->fbxbridge_state == 2 && maplen > COPY_BREAK_SIZE)
+		maplen = COPY_BREAK_SIZE;
+#endif
+
 	desc->l4i_chk = l4i_chk;
 	desc->byte_cnt = length;
 	desc->buf_ptr = dma_map_single(mp->dev->dev.parent, skb->data,
-				       length, DMA_TO_DEVICE);
+				       maplen, DMA_TO_DEVICE);
 
 	__skb_queue_tail(&txq->tx_skb, skb);
 
@@ -1017,7 +2858,7 @@ static netdev_tx_t mv643xx_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 	struct netdev_queue *nq;
 
 	queue = skb_get_queue_mapping(skb);
-	txq = mp->txq + queue;
+	txq = mp->txq + queue + NAPI_TX_OFFSET;
 	nq = netdev_get_tx_queue(dev, queue);
 
 	if (has_tiny_unaligned_frags(skb) && __skb_linearize(skb)) {
@@ -1051,10 +2892,14 @@ static netdev_tx_t mv643xx_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 static void txq_kick(struct tx_queue *txq)
 {
 	struct mv643xx_eth_private *mp = txq_to_mp(txq);
-	struct netdev_queue *nq = netdev_get_tx_queue(mp->dev, txq->index);
+	struct netdev_queue *nq;
 	u32 hw_desc_ptr;
 	u32 expected_ptr;
 
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+	WARN_ON(txq->index == 0);
+#endif
+	nq = netdev_get_tx_queue(mp->dev, txq->index - NAPI_TX_OFFSET);
 	__netif_tx_lock(nq, smp_processor_id());
 
 	if (rdlp(mp, TXQ_COMMAND) & (1 << txq->index))
@@ -1076,9 +2921,16 @@ out:
 static int txq_reclaim(struct tx_queue *txq, int budget, int force)
 {
 	struct mv643xx_eth_private *mp = txq_to_mp(txq);
-	struct netdev_queue *nq = netdev_get_tx_queue(mp->dev, txq->index);
+	struct netdev_queue *nq;
 	int reclaimed;
 
+	nq = NULL;
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+	if (txq->index != 0)
+#endif
+		nq = netdev_get_tx_queue(mp->dev, txq->index - NAPI_TX_OFFSET);
+
+	if (nq)
 	__netif_tx_lock_bh(nq);
 
 	reclaimed = 0;
@@ -1135,6 +2987,7 @@ static int txq_reclaim(struct tx_queue *txq, int budget, int force)
 
 	}
 
+	if (nq)
 	__netif_tx_unlock_bh(nq);
 
 	if (reclaimed < budget)
@@ -1312,6 +3165,7 @@ static void mib_counters_clear(struct mv643xx_eth_private *mp)
 static void mib_counters_update(struct mv643xx_eth_private *mp)
 {
 	struct mib_counters *p = &mp->mib_counters;
+	unsigned int i;
 
 	spin_lock_bh(&mp->mib_counters_lock);
 	p->good_octets_received += mib_read(mp, 0x00);
@@ -1347,6 +3201,12 @@ static void mib_counters_update(struct mv643xx_eth_private *mp)
 	/* Non MIB hardware counters */
 	p->rx_discard += rdlp(mp, RX_DISCARD_FRAME_CNT);
 	p->rx_overrun += rdlp(mp, RX_OVERRUN_FRAME_CNT);
+	/* Non MIB software counters */
+	for (i = 0; i < ARRAY_SIZE(mp->rxq); i++)
+		p->rx_packets_q[i] = mp->rxq[i].rx_packets;
+	for (i = 0; i < ARRAY_SIZE(mp->txq); i++)
+		p->tx_packets_q[i] = mp->txq[i].tx_packets;
+
 	spin_unlock_bh(&mp->mib_counters_lock);
 }
 
@@ -1494,6 +3354,22 @@ static const struct mv643xx_eth_stats mv643xx_eth_stats[] = {
 	MIBSTAT(late_collision),
 	MIBSTAT(rx_discard),
 	MIBSTAT(rx_overrun),
+	MIBSTAT(rx_packets_q[0]),
+	MIBSTAT(rx_packets_q[1]),
+	MIBSTAT(rx_packets_q[2]),
+	MIBSTAT(rx_packets_q[3]),
+	MIBSTAT(rx_packets_q[4]),
+	MIBSTAT(rx_packets_q[5]),
+	MIBSTAT(rx_packets_q[6]),
+	MIBSTAT(rx_packets_q[7]),
+	MIBSTAT(tx_packets_q[0]),
+	MIBSTAT(tx_packets_q[1]),
+	MIBSTAT(tx_packets_q[2]),
+	MIBSTAT(tx_packets_q[3]),
+	MIBSTAT(tx_packets_q[4]),
+	MIBSTAT(tx_packets_q[5]),
+	MIBSTAT(tx_packets_q[6]),
+	MIBSTAT(tx_packets_q[7]),
 };
 
 static int
@@ -1691,6 +3567,244 @@ mv643xx_eth_set_ringparam(struct net_device *dev, struct ethtool_ringparam *er)
 	return 0;
 }
 
+static void
+mv643xx_eth_get_channels(struct net_device *dev, struct ethtool_channels *c)
+{
+	struct mv643xx_eth_private *mp = netdev_priv(dev);
+
+	c->max_rx = 8;
+	c->max_tx = 8;
+	c->max_other = 0;
+	c->max_combined = c->max_rx + c->max_tx;
+	c->rx_count = mp->rxq_count;
+	c->tx_count = mp->txq_count;
+}
+
+static int
+mv643xx_eth_set_channels(struct net_device *dev, struct ethtool_channels *c)
+{
+	struct mv643xx_eth_private *mp = netdev_priv(dev);
+	bool was_runnning;
+
+	if (c->rx_count > 8 || c->tx_count > 8 - NAPI_TX_OFFSET ||
+	    c->max_other)
+		return -EINVAL;
+
+	was_runnning = netif_running(dev);
+	if (was_runnning)
+		mv643xx_eth_stop(dev);
+
+	mp->rxq_count = c->rx_count;
+	mp->txq_count = c->tx_count + NAPI_TX_OFFSET;
+
+	netif_set_real_num_rx_queues(dev, mp->rxq_count);
+	netif_set_real_num_tx_queues(dev, mp->txq_count - NAPI_TX_OFFSET);
+
+	if (was_runnning && mv643xx_eth_open(dev)) {
+		netdev_err(dev,
+			   "fatal error on re-opening device after channels change\n");
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
+struct vprio_queue {
+	int	prio;
+	int	queue;
+};
+
+static int cmp_queue_inv(const void *a, const void *b)
+{
+	const struct vprio_queue *pa = a, *pb = b;
+	if (pb->queue != pa->queue)
+		return pb->queue - pa->queue;
+	return pa->prio - pb->prio;
+}
+
+static void dump_vlan_rules(struct mv643xx_eth_private *mp,
+			    struct vprio_queue *vprio_to_queue)
+{
+	unsigned int i;
+	u32 val;
+
+	val = rdlp(mp, PORT_VPT2P);
+	for (i = 0; i < 8; i++) {
+		unsigned int queue;
+
+		queue = (val & (0x7 << i * 3)) >> (i * 3);
+		vprio_to_queue[i].prio = i;
+		vprio_to_queue[i].queue = queue;
+	}
+
+	/* sort with higher tx queue first */
+	sort(vprio_to_queue, 8, sizeof (vprio_to_queue[0]),
+	     cmp_queue_inv, NULL);
+}
+
+static unsigned int find_vlan_rule(struct mv643xx_eth_private *mp,
+				   unsigned int prio)
+{
+	struct vprio_queue vprio_to_queue[8];
+	unsigned int i;
+
+	/* check if we already have a rule for this vlan */
+	dump_vlan_rules(mp, vprio_to_queue);
+	for (i = 0; i < ARRAY_SIZE(vprio_to_queue); i++) {
+		if (vprio_to_queue[i].prio != prio)
+			continue;
+		return i;
+	}
+	/* never reached */
+	return 0;
+}
+
+static int
+mv643xx_eth_get_rxnfc(struct net_device *dev,
+		      struct ethtool_rxnfc *info, u32 *rule_locs)
+{
+	struct mv643xx_eth_private *mp = netdev_priv(dev);
+
+	switch (info->cmd) {
+	case ETHTOOL_GRXFH:
+		return -ENOTSUPP;
+	case ETHTOOL_GRXRINGS:
+		info->data = mp->rxq_count;
+		break;
+
+	case ETHTOOL_GRXCLSRLCNT:
+		info->rule_cnt = 8;
+		info->data = RX_CLS_LOC_SPECIAL;
+		break;
+
+	case ETHTOOL_GRXCLSRLALL:
+	{
+		unsigned int i;
+
+		if (info->rule_cnt < 8)
+			return -EINVAL;
+
+		info->data = 8;
+		info->rule_cnt = 8;
+
+		for (i = 0; i < 8; i++)
+			rule_locs[i] = i;
+
+		break;
+	}
+
+	case ETHTOOL_GRXCLSRULE:
+	{
+		struct vprio_queue vprio_to_queue[8], *r;
+		struct ethtool_flow_ext *h_ext, *m_ext;
+		unsigned int loc;
+
+		loc = info->fs.location;
+		if (loc >= ARRAY_SIZE(vprio_to_queue))
+			return -EINVAL;
+
+		dump_vlan_rules(mp, vprio_to_queue);
+		r = &vprio_to_queue[loc];
+
+		memset(&info->fs, 0, sizeof (info->fs));
+		info->fs.flow_type = ETHER_FLOW | FLOW_EXT;
+		info->fs.ring_cookie = r->queue;
+		info->fs.location = loc;
+
+		m_ext = &info->fs.m_ext;
+		m_ext->vlan_tci |= VLAN_PRIO_MASK;
+
+		h_ext = &info->fs.h_ext;
+		h_ext->vlan_tci |= r->prio << VLAN_PRIO_SHIFT;
+
+		break;
+	}
+	}
+	return 0;
+}
+
+static int
+mv643xx_eth_set_rxnfc(struct net_device *dev, struct ethtool_rxnfc *info)
+{
+	struct mv643xx_eth_private *mp = netdev_priv(dev);
+
+	switch (info->cmd) {
+	case ETHTOOL_SRXFH:
+		return -ENOTSUPP;
+
+	case ETHTOOL_SRXCLSRLINS:
+	{
+		struct ethhdr *m, z;
+		struct ethtool_flow_ext *h_ext, *m_ext;
+		unsigned int prio;
+		unsigned int rule_nr;
+		u32 val;
+
+		if ((info->fs.flow_type & (FLOW_MAC_EXT | FLOW_EXT)) !=
+		    FLOW_EXT)
+			return -EINVAL;
+
+		info->fs.flow_type &= ~FLOW_EXT;
+		if (info->fs.flow_type != ETHER_FLOW)
+			return -EINVAL;
+
+		if (info->fs.ring_cookie >= mp->rxq_count)
+			return -EINVAL;
+
+		if (info->fs.location != RX_CLS_LOC_ANY)
+			return -EINVAL;
+
+		/* no mask should be set on ethernet */
+		m = &info->fs.m_u.ether_spec;
+		memset(&z, 0, sizeof (z));
+		if (memcmp(m, &z, sizeof (*m)))
+			return -EINVAL;
+
+		/* no mask should be set on ext besides vlan prio */
+		m_ext = &info->fs.m_ext;
+		if (m_ext->vlan_etype ||
+		    m_ext->data[0] ||
+		    m_ext->data[1] ||
+		    ntohs(m_ext->vlan_tci) != VLAN_PRIO_MASK)
+			return -EINVAL;
+
+		/* ok, extract vlan prio */
+		h_ext = &info->fs.h_ext;
+		prio = (ntohs(h_ext->vlan_tci) & VLAN_PRIO_MASK) >>
+			VLAN_PRIO_SHIFT;
+
+		/* update vlan priority table for new rule */
+		rule_nr = find_vlan_rule(mp, prio);
+
+		val = rdlp(mp, PORT_VPT2P);
+		val |= info->fs.ring_cookie << (prio * 3);
+		wrlp(mp, PORT_VPT2P, val);
+
+		info->fs.location = rule_nr;
+		break;
+	}
+
+	case ETHTOOL_SRXCLSRLDEL:
+	{
+		struct vprio_queue vprio_to_queue[8], *r;
+		u32 val;
+
+		if (info->fs.location >= ARRAY_SIZE(vprio_to_queue))
+			return -EINVAL;
+
+		dump_vlan_rules(mp, vprio_to_queue);
+		r = &vprio_to_queue[info->fs.location];
+
+		/* update vlan priority table */
+		val = rdlp(mp, PORT_VPT2P);
+		val &= ~(0x7 << (r->prio * 3));
+		wrlp(mp, PORT_VPT2P, val);
+		break;
+	}
+	}
+
+	return 0;
+}
 
 static int
 mv643xx_eth_set_features(struct net_device *dev, netdev_features_t features)
@@ -1767,6 +3881,10 @@ static const struct ethtool_ops mv643xx_eth_ethtool_ops = {
 	.get_ts_info		= ethtool_op_get_ts_info,
 	.get_wol                = mv643xx_eth_get_wol,
 	.set_wol                = mv643xx_eth_set_wol,
+	.get_channels		= mv643xx_eth_get_channels,
+	.set_channels		= mv643xx_eth_set_channels,
+	.get_rxnfc		= mv643xx_eth_get_rxnfc,
+	.set_rxnfc		= mv643xx_eth_set_rxnfc,
 };
 
 
@@ -1942,7 +4060,6 @@ static int mv643xx_eth_set_mac_address(struct net_device *dev, void *addr)
 	return 0;
 }
 
-
 /* rx/tx queue initialisation ***********************************************/
 static int rxq_init(struct mv643xx_eth_private *mp, int index)
 {
@@ -1954,10 +4071,7 @@ static int rxq_init(struct mv643xx_eth_private *mp, int index)
 	rxq->index = index;
 
 	rxq->rx_ring_size = mp->rx_ring_size;
-
-	rxq->rx_desc_count = 0;
 	rxq->rx_curr_desc = 0;
-	rxq->rx_used_desc = 0;
 
 	size = rxq->rx_ring_size * sizeof(struct rx_desc);
 
@@ -1979,14 +4093,14 @@ static int rxq_init(struct mv643xx_eth_private *mp, int index)
 	memset(rxq->rx_desc_area, 0, size);
 
 	rxq->rx_desc_area_size = size;
-	rxq->rx_skb = kcalloc(rxq->rx_ring_size, sizeof(*rxq->rx_skb),
-				    GFP_KERNEL);
-	if (rxq->rx_skb == NULL)
-		goto out_free;
 
 	rx_desc = rxq->rx_desc_area;
 	for (i = 0; i < rxq->rx_ring_size; i++) {
-		int nexti;
+		int ret, nexti;
+
+                ret = rx_desc_refill(mp, &rx_desc[i], false);
+		if (ret)
+			goto out_free;
 
 		nexti = i + 1;
 		if (nexti == rxq->rx_ring_size)
@@ -2000,6 +4114,12 @@ static int rxq_init(struct mv643xx_eth_private *mp, int index)
 
 
 out_free:
+	for (i = 0; i < rxq->rx_ring_size; i++) {
+		if (!rx_desc[i].cookie)
+			break;
+		mv643xx_eth_frag_free(mp, (void *)rx_desc[i].cookie);
+	}
+
 	if (index == 0 && size <= mp->rx_desc_sram_size)
 		iounmap(rxq->rx_desc_area);
 	else
@@ -2018,17 +4138,8 @@ static void rxq_deinit(struct rx_queue *rxq)
 
 	rxq_disable(rxq);
 
-	for (i = 0; i < rxq->rx_ring_size; i++) {
-		if (rxq->rx_skb[i]) {
-			dev_kfree_skb(rxq->rx_skb[i]);
-			rxq->rx_desc_count--;
-		}
-	}
-
-	if (rxq->rx_desc_count) {
-		netdev_err(mp->dev, "error freeing rx ring -- %d skbs stuck\n",
-			   rxq->rx_desc_count);
-	}
+	for (i = 0; i < rxq->rx_ring_size; i++)
+		mv643xx_eth_frag_free(mp, (void *)rxq->rx_desc_area[i].cookie);
 
 	if (rxq->index == 0 &&
 	    rxq->rx_desc_area_size <= mp->rx_desc_sram_size)
@@ -2036,8 +4147,6 @@ static void rxq_deinit(struct rx_queue *rxq)
 	else
 		dma_free_coherent(mp->dev->dev.parent, rxq->rx_desc_area_size,
 				  rxq->rx_desc_area, rxq->rx_desc_dma);
-
-	kfree(rxq->rx_skb);
 }
 
 static int txq_init(struct mv643xx_eth_private *mp, int index)
@@ -2049,7 +4158,6 @@ static int txq_init(struct mv643xx_eth_private *mp, int index)
 	int i;
 
 	txq->index = index;
-
 	txq->tx_ring_size = mp->tx_ring_size;
 
 	/* A queue must always have room for at least one skb.
@@ -2172,6 +4280,9 @@ static int mv643xx_eth_collect_events(struct mv643xx_eth_private *mp)
 		wrlp(mp, INT_CAUSE, ~int_cause);
 		mp->work_tx_end |= ((int_cause & INT_TX_END) >> 19) &
 				~(rdlp(mp, TXQ_COMMAND) & 0xff);
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+		mp->work_tx_end &= ~INT_TX_END_0;
+#endif
 		mp->work_rx |= (int_cause & INT_RX) >> 2;
 	}
 
@@ -2181,6 +4292,9 @@ static int mv643xx_eth_collect_events(struct mv643xx_eth_private *mp)
 		if (int_cause_ext & INT_EXT_LINK_PHY)
 			mp->work_link = 1;
 		mp->work_tx |= int_cause_ext & INT_EXT_TX;
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+		mp->work_tx &= ~INT_EXT_TX_0;
+#endif
 	}
 
 	return 1;
@@ -2256,12 +4370,11 @@ static int mv643xx_eth_poll(struct napi_struct *napi, int budget)
 	struct mv643xx_eth_private *mp;
 	int work_done;
 
-	mp = container_of(napi, struct mv643xx_eth_private, napi);
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+	ff.jiffies = jiffies;
+#endif
 
-	if (unlikely(mp->oom)) {
-		mp->oom = 0;
-		del_timer(&mp->rx_oom);
-	}
+	mp = container_of(napi, struct mv643xx_eth_private, napi);
 
 	work_done = 0;
 	while (work_done < budget) {
@@ -2277,8 +4390,6 @@ static int mv643xx_eth_poll(struct napi_struct *napi, int budget)
 		}
 
 		queue_mask = mp->work_tx | mp->work_tx_end | mp->work_rx;
-		if (likely(!mp->oom))
-			queue_mask |= mp->work_rx_refill;
 
 		if (!queue_mask) {
 			if (mv643xx_eth_collect_events(mp))
@@ -2300,28 +4411,17 @@ static int mv643xx_eth_poll(struct napi_struct *napi, int budget)
 			txq_maybe_wake(mp->txq + queue);
 		} else if (mp->work_rx & queue_mask) {
 			work_done += rxq_process(mp->rxq + queue, work_tbd);
-		} else if (!mp->oom && (mp->work_rx_refill & queue_mask)) {
-			work_done += rxq_refill(mp->rxq + queue, work_tbd);
 		} else {
 			BUG();
 		}
 	}
 
 	if (work_done < budget) {
-		if (mp->oom)
-			mod_timer(&mp->rx_oom, jiffies + (HZ / 10));
 		napi_complete(napi);
 		wrlp(mp, INT_MASK, mp->int_mask);
 	}
 
 	return work_done;
-}
-
-static inline void oom_timer_wrapper(unsigned long data)
-{
-	struct mv643xx_eth_private *mp = (void *)data;
-
-	napi_schedule(&mp->napi);
 }
 
 static void port_start(struct mv643xx_eth_private *mp)
@@ -2398,32 +4498,34 @@ static void port_start(struct mv643xx_eth_private *mp)
 	}
 }
 
-static void mv643xx_eth_recalc_skb_size(struct mv643xx_eth_private *mp)
+static void mv643xx_eth_recalc_frag_size(struct mv643xx_eth_private *mp)
 {
-	int skb_size;
-
 	/*
 	 * Reserve 2+14 bytes for an ethernet header (the hardware
 	 * automatically prepends 2 bytes of dummy data to each
 	 * received packet), 16 bytes for up to four VLAN tags, and
 	 * 4 bytes for the trailing FCS -- 36 bytes total.
 	 */
-	skb_size = mp->dev->mtu + 36;
+	mp->pkt_size = mp->dev->mtu + 36;
 
 	/*
-	 * Make sure that the skb size is a multiple of 8 bytes, as
+	 * Make sure that the buffer size is a multiple of 8 bytes, as
 	 * the lower three bits of the receive descriptor's buffer
 	 * size field are ignored by the hardware.
 	 */
-	mp->skb_size = (skb_size + 7) & ~7;
+	BUILD_BUG_ON(SMP_CACHE_BYTES < 8);
 
 	/*
-	 * If NET_SKB_PAD is smaller than a cache line,
-	 * netdev_alloc_skb() will cause skb->data to be misaligned
-	 * to a cache line boundary.  If this is the case, include
-	 * some extra space to allow re-aligning the data area.
+	 * add NET_SKB_PAD per build_skb() requirement, make sure we
+	 * have room to align data to cache size after reserving
 	 */
-	mp->skb_size += SKB_DMA_REALIGN;
+	mp->frag_size = mp->pkt_size + RX_OFFSET;
+
+	/*
+	 * per build_skb() requirement
+	 */
+	mp->frag_size = (SKB_DATA_ALIGN(mp->frag_size) +
+			 SKB_DATA_ALIGN(sizeof (struct skb_shared_info)));
 }
 
 static int mv643xx_eth_open(struct net_device *dev)
@@ -2443,7 +4545,7 @@ static int mv643xx_eth_open(struct net_device *dev)
 		return -EAGAIN;
 	}
 
-	mv643xx_eth_recalc_skb_size(mp);
+	mv643xx_eth_recalc_frag_size(mp);
 
 	napi_enable(&mp->napi);
 
@@ -2457,13 +4559,7 @@ static int mv643xx_eth_open(struct net_device *dev)
 			goto out;
 		}
 
-		rxq_refill(mp->rxq + i, INT_MAX);
 		mp->int_mask |= INT_RX_0 << i;
-	}
-
-	if (mp->oom) {
-		mp->rx_oom.expires = jiffies + (HZ / 10);
-		add_timer(&mp->rx_oom);
 	}
 
 	for (i = 0; i < mp->txq_count; i++) {
@@ -2473,8 +4569,18 @@ static int mv643xx_eth_open(struct net_device *dev)
 				txq_deinit(mp->txq + i);
 			goto out_free;
 		}
+
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+		if (i != 0)
 		mp->int_mask |= INT_TX_END_0 << i;
+#else
+		mp->int_mask |= INT_TX_END_0 << i;
+#endif
 	}
+
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+	mp->ff_txq = &mp->txq[0];
+#endif
 
 	add_timer(&mp->mib_counters_timer);
 	port_start(mp);
@@ -2482,6 +4588,7 @@ static int mv643xx_eth_open(struct net_device *dev)
 	wrlp(mp, INT_MASK_EXT, INT_EXT_LINK_PHY | INT_EXT_TX);
 	wrlp(mp, INT_MASK, mp->int_mask);
 
+	mp_by_unit[mp->shared->unit] = mp;
 	return 0;
 
 
@@ -2525,13 +4632,13 @@ static int mv643xx_eth_stop(struct net_device *dev)
 	struct mv643xx_eth_private *mp = netdev_priv(dev);
 	int i;
 
+	mp_by_unit[mp->shared->unit] = NULL;
+
 	wrlp(mp, INT_MASK_EXT, 0x00000000);
 	wrlp(mp, INT_MASK, 0x00000000);
 	rdlp(mp, INT_MASK);
 
 	napi_disable(&mp->napi);
-
-	del_timer_sync(&mp->rx_oom);
 
 	netif_carrier_off(dev);
 	if (mp->phy)
@@ -2542,6 +4649,10 @@ static int mv643xx_eth_stop(struct net_device *dev)
 	mv643xx_eth_get_stats(dev);
 	mib_counters_update(mp);
 	del_timer_sync(&mp->mib_counters_timer);
+
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+	mp->ff_txq = NULL;
+#endif
 
 	for (i = 0; i < mp->rxq_count; i++)
 		rxq_deinit(mp->rxq + i);
@@ -2556,13 +4667,22 @@ static int mv643xx_eth_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 	struct mv643xx_eth_private *mp = netdev_priv(dev);
 	int ret;
 
-	if (mp->phy == NULL)
-		return -ENOTSUPP;
-
+	if (mp->phy != NULL) {
 	ret = phy_mii_ioctl(mp->phy, ifr, cmd);
 	if (!ret)
 		mv643xx_eth_adjust_link(dev);
-	return ret;
+	} else {
+		struct mii_if_info mii;
+
+		mii.dev = dev;
+		mii.mdio_read = mii_bus_read;
+		mii.mdio_write = mii_bus_write;
+		mii.phy_id = 0;
+		mii.phy_id_mask = 0x3f;
+		mii.reg_num_mask = 0x1f;
+		return generic_mii_ioctl(&mii, if_mii(ifr), cmd, NULL);
+	}
+	return -ENOTSUPP;
 }
 
 static int mv643xx_eth_change_mtu(struct net_device *dev, int new_mtu)
@@ -2573,7 +4693,7 @@ static int mv643xx_eth_change_mtu(struct net_device *dev, int new_mtu)
 		return -EINVAL;
 
 	dev->mtu = new_mtu;
-	mv643xx_eth_recalc_skb_size(mp);
+	mv643xx_eth_recalc_frag_size(mp);
 	tx_set_rate(mp, 1000000000, 16777216);
 
 	if (!netif_running(dev))
@@ -2814,6 +4934,12 @@ static int mv643xx_eth_shared_of_probe(struct platform_device *pdev)
 	pdev->dev.platform_data = pd;
 
 	mv643xx_eth_property(np, "tx-checksum-limit", pd->tx_csum_limit);
+	mv643xx_eth_property(np, "unit", pd->unit);
+
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+	if (!of_property_read_u32(np, "fbx,ff-model", &ff_mode))
+		ff_init(&pdev->dev);
+#endif
 
 	for_each_available_child_of_node(np, pnp) {
 		ret = mv643xx_eth_shared_of_add_port(pdev, pnp);
@@ -2887,6 +5013,7 @@ static int mv643xx_eth_shared_probe(struct platform_device *pdev)
 		goto err_put_clk;
 	pd = dev_get_platdata(&pdev->dev);
 
+	msp->unit = (pd ? pd->unit : 0);
 	msp->tx_csum_limit = (pd != NULL && pd->tx_csum_limit) ?
 					pd->tx_csum_limit : 9 * 1024;
 	infer_hw_params(msp);
@@ -2971,6 +5098,7 @@ static void set_params(struct mv643xx_eth_private *mp,
 	mp->tx_desc_sram_size = pd->tx_sram_size;
 
 	mp->txq_count = pd->tx_queue_count ? : 1;
+	mp->txq_count += NAPI_TX_OFFSET;
 }
 
 static struct phy_device *phy_scan(struct mv643xx_eth_private *mp,
@@ -3025,6 +5153,45 @@ static void phy_init(struct mv643xx_eth_private *mp, int speed, int duplex)
 		phy->duplex = duplex;
 	}
 	phy_start_aneg(phy);
+}
+
+static int mii_bus_read(struct net_device *dev, int mii_id, int regnum)
+{
+	struct mv643xx_eth_private *mp = netdev_priv(dev);
+	if (!mp->mii_bus)
+		return 0xffff;
+	return mp->mii_bus->read(mp->mii_bus, mii_id, regnum);
+}
+
+static void mii_bus_write(struct net_device *dev, int mii_id, int regnum,
+			 int value)
+{
+	struct mv643xx_eth_private *mp = netdev_priv(dev);
+	if (!mp->mii_bus)
+		return ;
+	mp->mii_bus->write(mp->mii_bus, mii_id, regnum, value);
+}
+
+static int mii_bus_init(struct net_device *dev,
+			struct platform_device *pdev,
+			struct mv643xx_eth_platform_data *pd)
+{
+	struct mv643xx_eth_private *mp = netdev_priv(dev);
+	extern void fbxgw_common_switch_init(struct net_device *dev,
+			     typeof(mii_bus_read), typeof(mii_bus_write));
+
+
+
+	mp->mii_bus = mdio_find_bus("f1072004.mdio-bu");
+	if (!mp->mii_bus) {
+		dev_err(&pdev->dev, "unable to find mdio bus f1072004.mdio-bu");
+		return -ENODEV;
+	}
+
+#ifdef CONFIG_FBXGW_COMMON
+	fbxgw_common_switch_init(dev, mii_bus_read, mii_bus_write);
+#endif
+	return 0;
 }
 
 static void init_pscr(struct mv643xx_eth_private *mp, int speed, int duplex)
@@ -3091,7 +5258,9 @@ static int mv643xx_eth_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	dev = alloc_etherdev_mq(sizeof(struct mv643xx_eth_private), 8);
+	dev = alloc_etherdev_mqs(sizeof(struct mv643xx_eth_private),
+				 pd->tx_queue_count ? : 1,
+				 pd->rx_queue_count ? : 1);
 	if (!dev)
 		return -ENOMEM;
 
@@ -3127,7 +5296,7 @@ static int mv643xx_eth_probe(struct platform_device *pdev)
 	}
 
 	set_params(mp, pd);
-	netif_set_real_num_tx_queues(dev, mp->txq_count);
+	netif_set_real_num_tx_queues(dev, mp->txq_count - NAPI_TX_OFFSET);
 	netif_set_real_num_rx_queues(dev, mp->rxq_count);
 
 	err = 0;
@@ -3146,6 +5315,8 @@ static int mv643xx_eth_probe(struct platform_device *pdev)
 			err = PTR_ERR(mp->phy);
 		else
 			phy_init(mp, pd->speed, pd->duplex);
+	} else {
+		mii_bus_init(dev, pdev, pd);
 	}
 	if (err == -ENODEV) {
 		err = -EPROBE_DEFER;
@@ -3170,8 +5341,6 @@ static int mv643xx_eth_probe(struct platform_device *pdev)
 	INIT_WORK(&mp->tx_timeout_task, tx_timeout_task);
 
 	netif_napi_add(dev, &mp->napi, mv643xx_eth_poll, NAPI_POLL_WEIGHT);
-
-	setup_timer(&mp->rx_oom, oom_timer_wrapper, (unsigned long)mp);
 
 
 	res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
@@ -3214,6 +5383,11 @@ static int mv643xx_eth_probe(struct platform_device *pdev)
 	if (mp->tx_desc_sram_size > 0)
 		netdev_notice(dev, "configured with sram\n");
 
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+	mp->ff_notifier.notifier_call = ff_device_event;
+	register_netdevice_notifier(&mp->ff_notifier);
+#endif
+
 	return 0;
 
 out:
@@ -3227,6 +5401,10 @@ out:
 static int mv643xx_eth_remove(struct platform_device *pdev)
 {
 	struct mv643xx_eth_private *mp = platform_get_drvdata(pdev);
+
+#ifdef CONFIG_MV643XX_ETH_FBX_FF
+	unregister_netdevice_notifier(&mp->ff_notifier);
+#endif
 
 	unregister_netdev(mp->dev);
 	if (mp->phy != NULL)

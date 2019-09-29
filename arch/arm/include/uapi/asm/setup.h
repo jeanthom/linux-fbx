@@ -143,6 +143,37 @@ struct tag_memclk {
 	__u32 fmemclk;
 };
 
+/*
+ * bootloader version
+ */
+#define ATAG_LOADER_VERSION	0x41000045
+struct tag_loader_version {
+	char version[1];
+};
+
+/*
+ * freebox serial info
+ */
+#include <linux/fbxserial.h>
+#define ATAG_FBXSERIAL          0x41000044
+struct tag_fbxserial {
+        struct fbx_serial serial;
+};
+
+/*
+ * boot_info tag, used by bank0 in conjuction with fbxhwinfo to
+ * sortout whether:
+ *
+ * - user forced a bank0 boot
+ * - user forced a bank0 boot _and_ asked for nvram to be erased.
+ */
+#define ATAG_BOOT_INFO		0x41000046
+struct tag_boot_info {
+	u32 erase_nvram;		/* == 1 if user selected nvram erase */
+	u32 bank0_forced;		/* == 1 if bank0 boot was
+					   forced by user*/
+};
+
 struct tag {
 	struct tag_header hdr;
 	union {
@@ -165,6 +196,12 @@ struct tag {
 		 * DC21285 specific
 		 */
 		struct tag_memclk	memclk;
+		/*
+		 * Freebox specific
+		 */
+		struct tag_loader_version loader_version;
+		struct tag_fbxserial	fbxserial;
+		struct tag_boot_info	boot_info;
 	} u;
 };
 

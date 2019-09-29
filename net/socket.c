@@ -867,6 +867,31 @@ static long sock_do_ioctl(struct net *net, struct socket *sock,
 	return err;
 }
 
+static DEFINE_MUTEX(fbxdiverter_ioctl_mutex);
+static int (*fbxdiverter_ioctl_hook) (struct net *, unsigned int cmd, void __user *arg) = NULL;
+
+void fbxdiverter_ioctl_set(int (*hook) (struct net *, unsigned int,
+					void __user *))
+{
+	mutex_lock(&fbxdiverter_ioctl_mutex);
+	fbxdiverter_ioctl_hook = hook;
+	mutex_unlock(&fbxdiverter_ioctl_mutex);
+}
+
+EXPORT_SYMBOL(fbxdiverter_ioctl_set);
+
+static DEFINE_MUTEX(fbxbridge_ioctl_mutex);
+static int (*fbxbridge_ioctl_hook)(struct net *, unsigned int cmd, void __user *arg) = NULL;
+
+void fbxbridge_set(int (*hook)(struct net *, unsigned int, void __user *))
+{
+	mutex_lock(&fbxbridge_ioctl_mutex);
+	fbxbridge_ioctl_hook = hook;
+	mutex_unlock(&fbxbridge_ioctl_mutex);
+}
+
+EXPORT_SYMBOL(fbxbridge_set);
+
 /*
  *	With an ioctl, arg may well be a user mode pointer, but we don't know
  *	what to do with it - that's up to the protocol still.
@@ -939,6 +964,28 @@ static long sock_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 			if (dlci_ioctl_hook)
 				err = dlci_ioctl_hook(cmd, argp);
 			mutex_unlock(&dlci_ioctl_mutex);
+			break;
+		case SIOCGFBXDIVERT:
+		case SIOCSFBXDIVERT:
+			err = -ENOPKG;
+			if (!fbxdiverter_ioctl_hook)
+				request_module("fbxdiverter");
+
+			mutex_lock(&fbxdiverter_ioctl_mutex);
+			if (fbxdiverter_ioctl_hook)
+				err = fbxdiverter_ioctl_hook(net, cmd, argp);
+			mutex_unlock(&fbxdiverter_ioctl_mutex);
+			break;
+		case SIOCGFBXBRIDGE:
+		case SIOCSFBXBRIDGE:
+			err = -ENOPKG;
+			if (!fbxbridge_ioctl_hook)
+				request_module("fbxbridge");
+
+			mutex_lock(&fbxbridge_ioctl_mutex);
+			if (fbxbridge_ioctl_hook)
+				err = fbxbridge_ioctl_hook(net, cmd, argp);
+			mutex_unlock(&fbxbridge_ioctl_mutex);
 			break;
 		default:
 			err = sock_do_ioctl(net, sock, cmd, arg);

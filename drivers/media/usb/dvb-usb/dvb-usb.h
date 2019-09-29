@@ -294,7 +294,7 @@ struct dvb_usb_device_properties {
 	int generic_bulk_ctrl_endpoint_response;
 
 	int num_device_descs;
-	struct dvb_usb_device_description devices[12];
+	struct dvb_usb_device_description devices[32];
 };
 
 /**

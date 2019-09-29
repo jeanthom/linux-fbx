@@ -311,6 +311,83 @@ static const struct file_operations ptype_seq_fops = {
 	.release = seq_release_net,
 };
 
+#ifdef CONFIG_NETRXTHREAD
+/*
+ *	This is invoked by the /proc filesystem handler to display a device
+ *	in detail.
+ */
+static void *krxthread_seq_start(struct seq_file *seq, loff_t *pos)
+{
+	int *queue;
+
+	if (*pos > CONFIG_NETRXTHREAD_RX_QUEUE)
+		return NULL;
+
+	queue = kmalloc(sizeof(*queue), GFP_KERNEL);
+	if (!queue)
+		return NULL;
+	*queue = ((int)*pos - 1);
+
+	return queue;
+}
+
+static void *krxthread_seq_next(struct seq_file *seq, void *v, loff_t *pos)
+{
+	int *queue = v;
+
+	if (*pos == CONFIG_NETRXTHREAD_RX_QUEUE)
+		return NULL;
+
+	++*queue;
+	*pos = *queue + 1;
+	return queue;
+}
+
+static void krxthread_seq_stop(struct seq_file *seq, void *v)
+{
+	kfree(v);
+}
+
+static void krxthread_seq_printf_stats(struct seq_file *seq, int queue)
+{
+	seq_printf(seq, "%8u %12u %12u\n",
+		   queue,
+		   gkrxd[queue].stats_pkts,
+		   gkrxd[queue].stats_dropped);
+}
+
+static int krxthread_seq_show(struct seq_file *seq, void *v)
+{
+	int *queue = v;
+
+	if (*queue == -1)
+		seq_printf(seq, "%8s %12s %12s\n",
+			   "queue", "packets", "drops");
+	else
+		krxthread_seq_printf_stats(seq, *queue);
+	return 0;
+}
+
+static const struct seq_operations krxthread_seq_ops = {
+	.start = krxthread_seq_start,
+	.next  = krxthread_seq_next,
+	.stop  = krxthread_seq_stop,
+	.show  = krxthread_seq_show,
+};
+
+static int krxthread_seq_open(struct inode *inode, struct file *file)
+{
+	return seq_open(file, &krxthread_seq_ops);
+}
+
+static const struct file_operations krxthread_seq_fops = {
+	.owner	 = THIS_MODULE,
+	.open    = krxthread_seq_open,
+	.read    = seq_read,
+	.llseek  = seq_lseek,
+	.release = seq_release,
+};
+#endif /* KRXTHREAD */
 
 static int __net_init dev_proc_net_init(struct net *net)
 {
@@ -323,9 +400,13 @@ static int __net_init dev_proc_net_init(struct net *net)
 		goto out_dev;
 	if (!proc_create("ptype", S_IRUGO, net->proc_net, &ptype_seq_fops))
 		goto out_softnet;
-
 	if (wext_proc_init(net))
 		goto out_ptype;
+#ifdef CONFIG_NETRXTHREAD
+	if (!proc_create("krxthread", S_IRUGO, net->proc_net,
+			 &krxthread_seq_fops))
+		goto out_ptype;
+#endif
 	rc = 0;
 out:
 	return rc;

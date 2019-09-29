@@ -918,6 +918,11 @@ static resource_size_t mvebu_pcie_align_resource(struct pci_dev *dev,
 		return start;
 }
 
+static void __init mvebu_pcie_preinit(void)
+{
+	pci_clear_flags(PCI_REASSIGN_ALL_RSRC);
+}
+
 static void mvebu_pcie_enable(struct mvebu_pcie *pcie)
 {
 	struct hw_pci hw;
@@ -934,6 +939,7 @@ static void mvebu_pcie_enable(struct mvebu_pcie *pcie)
 	hw.map_irq        = of_irq_parse_and_map_pci;
 	hw.ops            = &mvebu_pcie_ops;
 	hw.align_resource = mvebu_pcie_align_resource;
+	hw.preinit	  = mvebu_pcie_preinit,
 
 	pci_common_init_dev(&pcie->pdev->dev, &hw);
 }

@@ -871,9 +871,7 @@ b_epilogue:
 			emit(ARM_LDR_I(r_A, r_scratch, off), ctx);
 			break;
 		case BPF_ANC | SKF_AD_IFINDEX:
-		case BPF_ANC | SKF_AD_HATYPE:
 			/* A = skb->dev->ifindex */
-			/* A = skb->dev->type */
 			ctx->seen |= SEEN_SKB;
 			off = offsetof(struct sk_buff, dev);
 			emit(ARM_LDR_I(r_scratch, r_skb, off), ctx);
@@ -927,17 +925,6 @@ b_epilogue:
 				OP_IMM3(ARM_AND, r_A, r_A, 0x1, ctx);
 			}
 			break;
-		case BPF_ANC | SKF_AD_PKTTYPE:
-			ctx->seen |= SEEN_SKB;
-			BUILD_BUG_ON(FIELD_SIZEOF(struct sk_buff,
-						  __pkt_type_offset[0]) != 1);
-			off = PKT_TYPE_OFFSET();
-			emit(ARM_LDRB_I(r_A, r_skb, off), ctx);
-			emit(ARM_AND_I(r_A, r_A, PKT_TYPE_MAX), ctx);
-#ifdef __BIG_ENDIAN_BITFIELD
-			emit(ARM_LSR_I(r_A, r_A, 5), ctx);
-#endif
-			break;
 		case BPF_ANC | SKF_AD_QUEUE:
 			ctx->seen |= SEEN_SKB;
 			BUILD_BUG_ON(FIELD_SIZEOF(struct sk_buff,
@@ -946,14 +933,6 @@ b_epilogue:
 					      queue_mapping) > 0xff);
 			off = offsetof(struct sk_buff, queue_mapping);
 			emit(ARM_LDRH_I(r_A, r_skb, off), ctx);
-			break;
-		case BPF_ANC | SKF_AD_PAY_OFFSET:
-			ctx->seen |= SEEN_SKB | SEEN_CALL;
-
-			emit(ARM_MOV_R(ARM_R0, r_skb), ctx);
-			emit_mov_i(ARM_R3, (unsigned int)skb_get_poff, ctx);
-			emit_blx_r(ARM_R3, ctx);
-			emit(ARM_MOV_R(r_A, ARM_R0), ctx);
 			break;
 		case BPF_LDX | BPF_W | BPF_ABS:
 			/*

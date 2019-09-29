@@ -27,6 +27,7 @@ struct ip_ct_tcp {
 	/* For SYN packets while we may be out-of-sync */
 	u_int8_t	last_wscale;	/* Last window scaling factor seen */
 	u_int8_t	last_flags;	/* Last flags set */
+	u_int32_t	no_window_track;
 };
 
 #endif /* _NF_CONNTRACK_TCP_H */

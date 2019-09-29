@@ -196,13 +196,13 @@ static int RANGE_TO_REG(long range)
 #define RANGE_FROM_REG(val)	lm85_range_map[(val) & 0x0f]
 
 /* These are the PWM frequency encodings */
-static const int lm85_freq_map[8] = { /* 1 Hz */
-	10, 15, 23, 30, 38, 47, 61, 94
+static const int lm85_freq_map[11] = { /* 1 Hz */
+	10, 15, 23, 30, 38, 47, 61, 94, 94, 94, 94
 };
-static const int adm1027_freq_map[8] = { /* 1 Hz */
-	11, 15, 22, 29, 35, 44, 59, 88
+static const int adm1027_freq_map[11] = { /* 1 Hz */
+	11, 15, 22, 29, 35, 44, 59, 88, 88, 88, 25000
 };
-#define FREQ_MAP_LEN	8
+#define FREQ_MAP_LEN	11
 
 static int FREQ_TO_REG(const int *map,
 		       unsigned int map_size, unsigned long freq)
@@ -212,7 +212,7 @@ static int FREQ_TO_REG(const int *map,
 
 static int FREQ_FROM_REG(const int *map, u8 reg)
 {
-	return map[reg & 0x07];
+	return map[reg & 0x0f];
 }
 
 /*
@@ -512,7 +512,7 @@ static struct lm85_data *lm85_update_device(struct device *dev)
 			data->autofan[i].config =
 			    lm85_read_value(client, LM85_REG_AFAN_CONFIG(i));
 			val = lm85_read_value(client, LM85_REG_AFAN_RANGE(i));
-			data->pwm_freq[i] = val & 0x07;
+			data->pwm_freq[i] = val & 0x0f;
 			data->zone[i].range = val >> 4;
 			data->autofan[i].min_pwm =
 			    lm85_read_value(client, LM85_REG_AFAN_MINPWM(i));
@@ -1194,7 +1194,7 @@ static ssize_t set_temp_auto_temp_min(struct device *dev,
 		TEMP_FROM_REG(data->zone[nr].limit));
 	lm85_write_value(client, LM85_REG_AFAN_RANGE(nr),
 		((data->zone[nr].range & 0x0f) << 4)
-		| (data->pwm_freq[nr] & 0x07));
+		| (data->pwm_freq[nr] & 0x0f));
 
 	mutex_unlock(&data->update_lock);
 	return count;
@@ -1230,7 +1230,7 @@ static ssize_t set_temp_auto_temp_max(struct device *dev,
 		val - min);
 	lm85_write_value(client, LM85_REG_AFAN_RANGE(nr),
 		((data->zone[nr].range & 0x0f) << 4)
-		| (data->pwm_freq[nr] & 0x07));
+		| (data->pwm_freq[nr] & 0x0f));
 	mutex_unlock(&data->update_lock);
 	return count;
 }
@@ -1419,9 +1419,27 @@ static const struct attribute_group lm85_group_in567 = {
 	.attrs = lm85_attributes_in567,
 };
 
-static void lm85_init_client(struct i2c_client *client)
+static void lm85_init_client(struct i2c_client *client, struct lm85_data *data)
 {
 	int value;
+
+	/* workaround for emc2300 (emc6d103s), when auto temp min is
+	 * the default value, pwm can never be controlled manually, so
+	 * change this */
+	if (data->type == emc6d103s) {
+		int nr;
+
+		for (nr = 0; nr < 3; nr++) {
+			data->zone[nr].limit = TEMP_TO_REG(-127000);
+			lm85_write_value(client, LM85_REG_AFAN_LIMIT(nr),
+					 data->zone[nr].limit);
+
+			/* also force high frequency */
+			data->pwm_freq[nr] = 0xa;
+			lm85_write_value(client, LM85_REG_AFAN_RANGE(nr),
+					 data->pwm_freq[nr]);
+		}
+	}
 
 	/* Start monitoring if needed */
 	value = lm85_read_value(client, LM85_REG_CONFIG);
@@ -1573,7 +1591,7 @@ static int lm85_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	data->vrm = vid_which_vrm();
 
 	/* Initialize the LM85 chip */
-	lm85_init_client(client);
+	lm85_init_client(client, data);
 
 	/* sysfs hooks */
 	data->groups[idx++] = &lm85_group;

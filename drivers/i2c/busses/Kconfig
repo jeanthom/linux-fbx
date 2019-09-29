@@ -1175,6 +1175,10 @@ config I2C_XGENE_SLIMPRO
 	  to SLIMpro (On chip coprocessor) mailbox mechanism.
 	  If unsure, say N.
 
+config I2C_WP3
+	tristate "Wintegra WP3 I2C controll"
+	depends on WINTEGRA_WINPATH3
+
 config SCx200_ACB
 	tristate "Geode ACCESS.bus support"
 	depends on X86_32 && PCI

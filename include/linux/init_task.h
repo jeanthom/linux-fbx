@@ -193,6 +193,7 @@ extern struct task_group root_task_group;
 	.stack		= &init_thread_info,				\
 	.usage		= ATOMIC_INIT(2),				\
 	.flags		= PF_KTHREAD,					\
+	.exec_mode	= EXEC_MODE_UNLIMITED,				\
 	.prio		= MAX_PRIO-20,					\
 	.static_prio	= MAX_PRIO-20,					\
 	.normal_prio	= MAX_PRIO-20,					\
