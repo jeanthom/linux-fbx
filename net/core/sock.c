@@ -988,6 +988,10 @@ set_rcvbuf:
 					 sk->sk_max_pacing_rate);
 		break;
 
+	case SO_UDP_DUP_UNICAST:
+		sock_valbool_flag(sk, SOCK_UDP_DUP_UNICAST, valbool);
+		break;
+
 	default:
 		ret = -ENOPROTOOPT;
 		break;
@@ -1246,6 +1250,10 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
 
 	case SO_INCOMING_CPU:
 		v.val = sk->sk_incoming_cpu;
+		break;
+
+	case SO_UDP_DUP_UNICAST:
+		v.val = sock_flag(sk, SOCK_UDP_DUP_UNICAST);
 		break;
 
 	default:

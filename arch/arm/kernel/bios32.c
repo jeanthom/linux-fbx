@@ -645,3 +645,21 @@ void __init pci_map_io_early(unsigned long pfn)
 	pci_io_desc.pfn = pfn;
 	iotable_init(&pci_io_desc, 1);
 }
+
+/*
+ *	pci hotplug won't map the irq for new devices, so use a fixup
+ *	to work around this.
+ */
+void pci_fixup_hotplug_irq(struct pci_dev *dev)
+{
+	int irq;
+
+	printk("pci_fixup_hotplug_irq.\n");
+
+	irq = pcibios_map_irq(dev, PCI_SLOT(dev->devfn), dev->pin);
+	if (irq == -1)
+		irq = 0;
+	dev->irq = irq;
+	pcibios_update_irq(dev, dev->irq);
+}
+DECLARE_PCI_FIXUP_HEADER(PCI_ANY_ID, PCI_ANY_ID, pci_fixup_hotplug_irq);

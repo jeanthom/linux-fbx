@@ -174,6 +174,7 @@ struct channel {
 	struct ppp	*ppp;		/* ppp unit we're connected to */
 	struct net	*chan_net;	/* the net channel belongs to */
 	struct list_head clist;		/* link in list of channels per unit */
+	int		stopped;	/* channel is stopped */
 	rwlock_t	upl;		/* protects `ppp' */
 #ifdef CONFIG_PPP_MULTILINK
 	u8		avail;		/* flag used in multilink stuff */
@@ -1137,7 +1138,7 @@ static void ppp_setup(struct net_device *dev)
 	dev->tx_queue_len = 3;
 	dev->type = ARPHRD_PPP;
 	dev->flags = IFF_POINTOPOINT | IFF_NOARP | IFF_MULTICAST;
-	dev->features |= NETIF_F_NETNS_LOCAL;
+//	dev->features |= NETIF_F_NETNS_LOCAL;
 	netif_keep_dst(dev);
 }
 
@@ -1162,10 +1163,28 @@ ppp_xmit_process(struct ppp *ppp)
 			ppp_send_frame(ppp, skb);
 		/* If there's no work left to do, tell the core net
 		   code that we can accept some more. */
-		if (!ppp->xmit_pending && !skb_peek(&ppp->file.xq))
+		if (!ppp->xmit_pending && !skb_peek(&ppp->file.xq)) {
+			/* only  enable  net  queue  if at  least  one
+			 * channel is not stopped */
+			struct list_head *list;
+			struct channel *pch;
+			bool need_wake;
+
+			list = &ppp->channels;
+			need_wake = false;
+			while ((list = list->next) != &ppp->channels) {
+				pch = list_entry(list, struct channel, clist);
+				if (!pch->stopped) {
+					need_wake = true;
+					break;
+				}
+			}
+
+			if (need_wake)
 			netif_wake_queue(ppp->dev);
 		else
 			netif_stop_queue(ppp->dev);
+	}
 	}
 	ppp_xmit_unlock(ppp);
 }
@@ -2394,7 +2413,21 @@ ppp_output_wakeup(struct ppp_channel *chan)
 
 	if (!pch)
 		return;
+	pch->stopped = 0;
 	ppp_channel_push(pch);
+}
+
+/*
+ * Callback from a channel when it want to prevent further transmit on it
+ */
+void
+ppp_output_stop(struct ppp_channel *chan)
+{
+	struct channel *pch = chan->ppp;
+
+	if (pch == 0)
+		return;
+	pch->stopped = 1;
 }
 
 /*
@@ -3038,6 +3071,7 @@ EXPORT_SYMBOL(ppp_dev_name);
 EXPORT_SYMBOL(ppp_input);
 EXPORT_SYMBOL(ppp_input_error);
 EXPORT_SYMBOL(ppp_output_wakeup);
+EXPORT_SYMBOL(ppp_output_stop);
 EXPORT_SYMBOL(ppp_register_compressor);
 EXPORT_SYMBOL(ppp_unregister_compressor);
 MODULE_LICENSE("GPL");

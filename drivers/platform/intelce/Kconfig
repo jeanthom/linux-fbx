@@ -1,0 +1,18 @@
+#
+# IntelCE devices configuration
+#
+
+menu "IntelCE devices"
+
+config INTELCE_GPIO
+	tristate "GPIO support"
+	select ARCH_REQUIRE_GPIOLIB
+	---help---
+	  IntelCE 3100/4100 GPIO support.
+
+config INTELCE_DFX
+	tristate "DFX reporting support"
+	---help---
+	  IntelCE 3100/4100 DFX fuse reporting support.
+
+endmenu

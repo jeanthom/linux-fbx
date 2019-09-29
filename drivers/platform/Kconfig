@@ -9,3 +9,11 @@ source "drivers/platform/goldfish/Kconfig"
 endif
 
 source "drivers/platform/chrome/Kconfig"
+
+if X86_INTEL_CE
+source "drivers/platform/intelce/Kconfig"
+endif
+
+if TANGO2
+source "drivers/platform/tango2/Kconfig"
+endif

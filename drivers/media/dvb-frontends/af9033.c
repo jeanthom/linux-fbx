@@ -272,6 +272,22 @@ static int af9033_init(struct dvb_frontend *fe)
 		{ 0x800045, dev->cfg.adc_multiplier, 0xff },
 	};
 
+	/* power up tuner - for performance */
+	switch (dev->cfg.tuner) {
+	case AF9033_TUNER_IT9135_38:
+	case AF9033_TUNER_IT9135_51:
+	case AF9033_TUNER_IT9135_52:
+	case AF9033_TUNER_IT9135_60:
+	case AF9033_TUNER_IT9135_61:
+	case AF9033_TUNER_IT9135_62:
+		ret = af9033_wr_reg(dev, 0x80ec40, 0x1);
+		ret |= af9033_wr_reg(dev, 0x80fba8, 0x0);
+		ret |= af9033_wr_reg(dev, 0x80ec57, 0x0);
+		ret |= af9033_wr_reg(dev, 0x80ec58, 0x0);
+		if (ret < 0)
+			goto err;
+	}
+
 	/* program clock control */
 	clock_cw = af9033_div(dev, dev->cfg.clock, 1000000ul, 19ul);
 	buf[0] = (clock_cw >>  0) & 0xff;
@@ -450,6 +466,8 @@ static int af9033_init(struct dvb_frontend *fe)
 	case AF9033_TUNER_IT9135_61:
 	case AF9033_TUNER_IT9135_62:
 		ret = af9033_wr_reg(dev, 0x800000, 0x01);
+		ret |= af9033_wr_reg(dev, 0x00d827, 0x00);
+		ret |= af9033_wr_reg(dev, 0x00d829, 0x00);
 		if (ret < 0)
 			goto err;
 	}

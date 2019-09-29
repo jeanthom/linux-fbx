@@ -187,9 +187,14 @@ bool ip_call_ra_chain(struct sk_buff *skb)
 	return false;
 }
 
-static int ip_local_deliver_finish(struct sock *sk, struct sk_buff *skb)
+int ip_local_deliver_finish(struct sock *sk, struct sk_buff *skb)
 {
 	struct net *net = dev_net(skb->dev);
+
+#ifdef CONFIG_IP_FFN
+	if (skb->ffn_state == FFN_STATE_FORWARDABLE)
+		ip_ffn_add(skb, IP_FFN_LOCAL_IN);
+#endif
 
 	__skb_pull(skb, skb_network_header_len(skb));
 
@@ -451,6 +456,11 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 
 	/* Must drop socket now because of tproxy. */
 	skb_orphan(skb);
+
+#ifdef CONFIG_IP_FFN
+	if (!ip_ffn_process(skb))
+		return NET_RX_SUCCESS;
+#endif
 
 	return NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING, NULL, skb,
 		       dev, NULL,

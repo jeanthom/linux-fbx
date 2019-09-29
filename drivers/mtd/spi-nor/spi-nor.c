@@ -29,6 +29,9 @@
 #define SPI_NOR_MAX_ID_LEN	6
 
 struct flash_info {
+
+	uint32_t ext_id;
+
 	/*
 	 * This array stores the ID bytes.
 	 * The first three bytes are the JEDIC ID.
@@ -55,6 +58,8 @@ struct flash_info {
 #define	SPI_NOR_DUAL_READ	0x20    /* Flash supports Dual Read */
 #define	SPI_NOR_QUAD_READ	0x40    /* Flash supports Quad Read */
 #define	USE_FSR			0x80	/* use flag status register */
+#define ALT_PROBE		0x100	/* only match during alt_probe */
+#define ALT_PROBE_ATMEL		0x200	/* only match during alt_probe_atmel */
 };
 
 #define JEDEC_MFR(info)	((info)->id[0])
@@ -470,6 +475,7 @@ static int spi_nor_unlock(struct mtd_info *mtd, loff_t ofs, uint64_t len)
 /* Used when the "_ext_id" is two bytes at most */
 #define INFO(_jedec_id, _ext_id, _sector_size, _n_sectors, _flags)	\
 	((kernel_ulong_t)&(struct flash_info) {				\
+		.ext_id = (_ext_id),                                    \
 		.id = {							\
 			((_jedec_id) >> 16) & 0xff,			\
 			((_jedec_id) >> 8) & 0xff,			\
@@ -486,6 +492,7 @@ static int spi_nor_unlock(struct mtd_info *mtd, loff_t ofs, uint64_t len)
 
 #define INFO6(_jedec_id, _ext_id, _sector_size, _n_sectors, _flags)	\
 	((kernel_ulong_t)&(struct flash_info) {				\
+		.ext_id = (_ext_id),                                    \
 		.id = {							\
 			((_jedec_id) >> 16) & 0xff,			\
 			((_jedec_id) >> 8) & 0xff,			\
@@ -699,6 +706,22 @@ static const struct spi_device_id spi_nor_ids[] = {
 	{ "cat25c09", CAT25_INFO( 128, 8, 32, 2, SPI_NOR_NO_ERASE | SPI_NOR_NO_FR) },
 	{ "cat25c17", CAT25_INFO( 256, 8, 32, 2, SPI_NOR_NO_ERASE | SPI_NOR_NO_FR) },
 	{ "cat25128", CAT25_INFO(2048, 8, 64, 2, SPI_NOR_NO_ERASE | SPI_NOR_NO_FR) },
+
+	/* Used on Freebox Gateways ... */
+
+	/* Atmel */
+	{ "at25f512b",  INFO(0x1f6500, 0x1f65, 32 * 1024, 2,
+			     ALT_PROBE_ATMEL) },
+	/* Macronix */
+	{ "mx25l512", INFO(0xc20500, 0xc205, 64 * 1024, 1,
+			   ALT_PROBE | SECT_4K) },
+	/* SST */
+	{ "sst25vf512a", INFO(0xbf4800, 0xbf48, 32 * 1024, 2, ALT_PROBE) },
+
+	/* EON */
+	{ "en25f05", INFO(0x1c0500, 0x1c05, 64 * 1024, 1,
+			  ALT_PROBE | SECT_4K) },
+
 	{ },
 };
 
@@ -725,6 +748,58 @@ static const struct spi_device_id *spi_nor_read_id(struct spi_nor *nor)
 		id[0], id[1], id[2]);
 	return ERR_PTR(-ENODEV);
 }
+
+static const struct spi_device_id *spi_nor_alt_read_id(struct spi_nor *nor)
+{
+	u8			data[2];
+	u16			id;
+	int			err, tmp;
+	struct flash_info	*info;
+
+	err = nor->read_alt_id(nor, SPINOR_OP_RDID_ALT, data, sizeof (data));
+	if (err) {
+		dev_dbg(nor->dev, "error %d reading ALT ID.\n", err);
+		return ERR_PTR(err);
+	}
+	id = (data[1] << 8) | data[0];
+
+	for (tmp = 0; tmp < ARRAY_SIZE(spi_nor_ids) - 1; tmp++) {
+
+		info = (void *)spi_nor_ids[tmp].driver_data;
+		if ((info->flags & ALT_PROBE) && (info->ext_id == id))
+			return &spi_nor_ids[tmp];
+	}
+
+	dev_err(nor->dev, "unrecognized ALT id %04x\n", id);
+	return ERR_PTR(-ENODEV);
+}
+
+static const struct spi_device_id *spi_nor_atmel_id(struct spi_nor *nor)
+{
+	u8			data[2];
+	u16			id;
+	int			err, tmp;
+	struct flash_info	*info;
+
+	err = nor->read_atmel_id(nor, 0x15, data, sizeof (data));
+	if (err) {
+		dev_dbg(nor->dev, "error %d reading ATMEL ID.\n", err);
+		return ERR_PTR(err);
+	}
+	id = (data[1] << 8) | data[0];
+
+	for (tmp = 0; tmp < ARRAY_SIZE(spi_nor_ids) - 1; tmp++) {
+
+		info = (void *)spi_nor_ids[tmp].driver_data;
+		if ((info->flags & ALT_PROBE_ATMEL) && (info->ext_id == id))
+			return &spi_nor_ids[tmp];
+	}
+
+	dev_err(nor->dev, "unrecognized ATMEL id %04x\n", id);
+	return ERR_PTR(-ENODEV);
+}
+
+
 
 static int spi_nor_read(struct mtd_info *mtd, loff_t from, size_t len,
 			size_t *retlen, u_char *buf)
@@ -1001,6 +1076,13 @@ static int spi_nor_check(struct spi_nor *nor)
 	return 0;
 }
 
+static void sst_write_enable(struct spi_nor *nor)
+{
+	write_enable(nor);
+	nor->write_reg(nor, SPINOR_OP_EWRSR, NULL, 0, 0);
+	write_sr(nor, 0);
+}
+
 int spi_nor_scan(struct spi_nor *nor, const char *name, enum read_mode mode)
 {
 	const struct spi_device_id	*id = NULL;
@@ -1032,6 +1114,12 @@ int spi_nor_scan(struct spi_nor *nor, const char *name, enum read_mode mode)
 	if (name && info->id_len) {
 		const struct spi_device_id *jid;
 
+		jid = spi_nor_alt_read_id(nor);
+		if (IS_ERR(jid))
+			/* try ATMEL */
+			jid = spi_nor_atmel_id(nor);
+		if (IS_ERR(jid))
+			/* try JEDEC */
 		jid = spi_nor_read_id(nor);
 		if (IS_ERR(jid)) {
 			return PTR_ERR(jid);
@@ -1063,6 +1151,9 @@ int spi_nor_scan(struct spi_nor *nor, const char *name, enum read_mode mode)
 		write_enable(nor);
 		write_sr(nor, 0);
 	}
+
+	if (info->ext_id == 0xbf48)
+		sst_write_enable(nor);
 
 	if (!mtd->name)
 		mtd->name = dev_name(dev);

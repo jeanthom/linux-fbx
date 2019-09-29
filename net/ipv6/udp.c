@@ -841,6 +841,52 @@ start_lookup:
 	return 0;
 }
 
+/*
+ * Note: called only from the BH handler context,
+ * so we don't need to lock the hashes.
+ */
+static int __udp6_lib_uc_conflict_deliver(struct net *net, struct sk_buff *skb,
+		const struct in6_addr *saddr, const struct in6_addr *daddr,
+		struct udp_table *udptable)
+{
+	struct sock *sk, *stack[256 / sizeof(struct sock *)];
+	const struct udphdr *uh = udp_hdr(skb);
+	struct udp_hslot *hslot = udp_hashslot(udptable, net, ntohs(uh->dest));
+	struct hlist_nulls_node *node;
+	int dif;
+	unsigned int count = 0, non_dup_count = 0;
+
+	spin_lock(&hslot->lock);
+	sk = sk_nulls_head(&hslot->head);
+	dif = inet6_iif(skb);
+	sk_nulls_for_each (sk, node, &hslot->head) {
+		if (!sock_flag(sk, SOCK_UDP_DUP_UNICAST)) {
+			if (!non_dup_count) {
+				stack[count++] = sk;
+				sock_hold(sk);
+			}
+			non_dup_count = 1;
+		} else {
+			stack[count++] = sk;
+			sock_hold(sk);
+		}
+
+		if (unlikely(count == ARRAY_SIZE(stack))) {
+			flush_stack(stack, count, skb, ~0);
+			count = 0;
+		}
+	}
+
+	spin_unlock(&hslot->lock);
+
+	if (count) {
+		flush_stack(stack, count, skb, count - 1);
+	} else {
+		kfree_skb(skb);
+	}
+	return 0;
+}
+
 int __udp6_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 		   int proto)
 {
@@ -909,6 +955,12 @@ int __udp6_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 		if (inet_get_convert_csum(sk) && uh->check && !IS_UDPLITE(sk))
 			skb_checksum_try_convert(skb, IPPROTO_UDP, uh->check,
 						 ip6_compute_pseudo);
+		if (sk->sk_reuse_conflict) {
+			sock_put(sk);
+			return __udp6_lib_uc_conflict_deliver(net, skb,
+							      saddr, daddr,
+							      udptable);
+		}
 
 		ret = udpv6_queue_rcv_skb(sk, skb);
 		sock_put(sk);

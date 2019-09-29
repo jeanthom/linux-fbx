@@ -221,7 +221,9 @@ static int cryptomgr_test(void *data)
 	if (type & CRYPTO_ALG_TESTED)
 		goto skiptest;
 
+#ifdef CONFIG_CRYPTO_BUILTIN_TEST
 	err = alg_test(param->driver, param->alg, type, CRYPTO_ALG_TESTED);
+#endif
 
 skiptest:
 	crypto_alg_tested(param->driver, err);

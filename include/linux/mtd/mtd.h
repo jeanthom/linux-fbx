@@ -163,6 +163,10 @@ struct mtd_info {
 	 */
 	unsigned int bitflip_threshold;
 
+	/* NAND related attributes */
+	const char *nand_type;
+	const char *nand_manufacturer;
+
 	// Kernel-only stuff starts here.
 	const char *name;
 	int index;

@@ -945,6 +945,10 @@ static int __init inet6_init(void)
 	if (err)
 		goto udpv6_fail;
 
+#ifdef CONFIG_IPV6_FFN
+	ipv6_ffn_init();
+#endif
+
 	err = udplitev6_init();
 	if (err)
 		goto udplitev6_fail;

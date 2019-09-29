@@ -83,6 +83,7 @@ struct mvebu_gpio_chip {
 	int		   irqbase;
 	struct irq_domain *domain;
 	int		   soc_variant;
+	int		   broken_mpp33_dir_wa;
 
 	/* Used to preserve GPIO registers across suspend/resume */
 	u32                out_reg;
@@ -259,11 +260,20 @@ static int mvebu_gpio_direction_input(struct gpio_chip *chip, unsigned pin)
 	if (ret)
 		return ret;
 
+	if (pin == 1 && mvchip->broken_mpp33_dir_wa) {
+		/*
+		 * See comment in mvebu_gpio_direction_output().
+		 */
+		u = readl_relaxed(mvebu_gpioreg_io_conf(mvchip) - 0x40);
+		u |= ~(1 << 1);
+		writel_relaxed(u, mvebu_gpioreg_io_conf(mvchip) - 0x40);
+	} else {
 	spin_lock_irqsave(&mvchip->lock, flags);
 	u = readl_relaxed(mvebu_gpioreg_io_conf(mvchip));
 	u |= 1 << pin;
 	writel_relaxed(u, mvebu_gpioreg_io_conf(mvchip));
 	spin_unlock_irqrestore(&mvchip->lock, flags);
+	}
 
 	return 0;
 }
@@ -286,11 +296,22 @@ static int mvebu_gpio_direction_output(struct gpio_chip *chip, unsigned pin,
 	mvebu_gpio_blink(chip, pin, 0);
 	mvebu_gpio_set(chip, pin, value);
 
+	if (pin == 1 && mvchip->broken_mpp33_dir_wa) {
+		/*
+		 * gpio33 direction bit is not controlled from the
+		 * gpio block 0, but from gpio block 1 instead. NOTE:
+		 * Screw locking.
+		 */
+		u = readl_relaxed(mvebu_gpioreg_io_conf(mvchip) - 0x40);
+		u &= ~(1 << 1);
+		writel_relaxed(u, mvebu_gpioreg_io_conf(mvchip) - 0x40);
+	} else {
 	spin_lock_irqsave(&mvchip->lock, flags);
 	u = readl_relaxed(mvebu_gpioreg_io_conf(mvchip));
 	u &= ~(1 << pin);
 	writel_relaxed(u, mvebu_gpioreg_io_conf(mvchip));
 	spin_unlock_irqrestore(&mvchip->lock, flags);
+	}
 
 	return 0;
 }
@@ -675,6 +696,7 @@ static int mvebu_gpio_probe(struct platform_device *pdev)
 	unsigned int ngpios;
 	int soc_variant;
 	int i, cpu, id;
+	uint32_t broken_mpp33_dir = 0;
 	int err;
 
 	match = of_match_device(mvebu_gpio_of_match, &pdev->dev);
@@ -695,6 +717,12 @@ static int mvebu_gpio_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
+	of_property_read_u32(pdev->dev.of_node, "marvell,broken-mpp33-dir",
+			     &broken_mpp33_dir);
+	if (broken_mpp33_dir)
+		dev_notice(&pdev->dev, "using direction set work around for "
+			   "MPP 33.\n");
+
 	id = of_alias_get_id(pdev->dev.of_node, "gpio");
 	if (id < 0) {
 		dev_err(&pdev->dev, "Couldn't get OF id\n");
@@ -706,6 +734,7 @@ static int mvebu_gpio_probe(struct platform_device *pdev)
 	if (!IS_ERR(clk))
 		clk_prepare_enable(clk);
 
+	mvchip->broken_mpp33_dir_wa = broken_mpp33_dir;
 	mvchip->soc_variant = soc_variant;
 	mvchip->chip.label = dev_name(&pdev->dev);
 	mvchip->chip.dev = &pdev->dev;
@@ -860,4 +889,13 @@ static struct platform_driver mvebu_gpio_driver = {
 	.suspend        = mvebu_gpio_suspend,
 	.resume         = mvebu_gpio_resume,
 };
+
+#ifdef CONFIG_FBXGW_COMMON
+int mvebu_gpio_driver_init(void)
+{
+	return platform_driver_register(&mvebu_gpio_driver);
+}
+EXPORT_SYMBOL(mvebu_gpio_driver_init);
+#else
 module_platform_driver(mvebu_gpio_driver);
+#endif

@@ -30,6 +30,9 @@
 #include <linux/netfilter_ipv4/ip_tables.h>
 #include <net/netfilter/nf_log.h>
 #include "../../netfilter/xt_repldata.h"
+#ifdef CONFIG_FBXBRIDGE
+#include <linux/fbxbridge.h>
+#endif
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Netfilter Core Team <coreteam@netfilter.org>");
@@ -1287,6 +1290,14 @@ do_replace(struct net *net, const void __user *user, unsigned int len)
 			   tmp.num_counters, tmp.counters);
 	if (ret)
 		goto free_newinfo_untrans;
+
+#ifdef CONFIG_IP_FFN
+	ip_ffn_flush_all();
+#endif
+
+#if defined(CONFIG_FBXBRIDGE) || defined(CONFIG_FBXBRIDGE_MODULE)
+	fbxbridge_fp_flush_all();
+#endif
 	return 0;
 
  free_newinfo_untrans:

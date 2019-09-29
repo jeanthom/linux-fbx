@@ -17,6 +17,11 @@ struct nf_ct_ftp_master {
 	u_int16_t seq_aft_nl_num[IP_CT_DIR_MAX];
 	/* pickup sequence tracking, useful for conntrackd */
 	u_int16_t flags[IP_CT_DIR_MAX];
+#if defined(CONFIG_FREEBOX_BRIDGE) || defined(CONFIG_FREEBOX_BRIDGE_MODULE)
+	unsigned int is_fbxbridge;
+	unsigned long fbxbridge_remote;
+	unsigned long fbxbridge_wan;
+#endif
 };
 
 struct nf_conntrack_expect;

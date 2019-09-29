@@ -684,6 +684,11 @@ config BLK_DEV_IDE_AU1XXX_MDMA2_DBDMA
        depends on BLK_DEV_IDE_AU1XXX
 endchoice
 
+config BLK_DEV_IDE_TANGO2
+	tristate "IDE for Tango2"
+	depends on TANGO2
+	select BLK_DEV_IDEDMA_SFF
+
 config BLK_DEV_IDE_TX4938
 	tristate "TX4938 internal IDE support"
 	depends on SOC_TX4938

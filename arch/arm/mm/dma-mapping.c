@@ -872,6 +872,11 @@ static void __dma_page_dev_to_cpu(struct page *page, unsigned long off,
 	phys_addr_t paddr = page_to_phys(page) + off;
 
 	/* FIXME: non-speculating: not required */
+#ifdef CONFIG_MACH_KIRKWOOD
+	if (dir == DMA_FROM_DEVICE)
+		return;
+#endif
+
 	/* in any case, don't bother invalidating if DMA to device */
 	if (dir != DMA_TO_DEVICE) {
 		outer_inv_range(paddr, paddr + size);

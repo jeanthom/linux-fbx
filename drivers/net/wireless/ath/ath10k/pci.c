@@ -536,7 +536,8 @@ static bool ath10k_pci_irq_pending(struct ath10k *ar)
 	/* Check if the shared legacy irq is for us */
 	cause = ath10k_pci_read32(ar, SOC_CORE_BASE_ADDRESS +
 				  PCIE_INTR_CAUSE_ADDRESS);
-	if (cause & (PCIE_INTR_FIRMWARE_MASK | PCIE_INTR_CE_MASK_ALL))
+	if (cause & (PCIE_INTR_FIRMWARE_MASK | PCIE_INTR_CE_MASK_ALL) &&
+	    cause != 0xdeadbeef)
 		return true;
 
 	return false;

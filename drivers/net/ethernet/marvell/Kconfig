@@ -21,6 +21,7 @@ config MV643XX_ETH
 	depends on (MV64X60 || PPC32 || PLAT_ORION) && INET
 	select PHYLIB
 	select MVMDIO
+	select MII
 	---help---
 	  This driver supports the gigabit ethernet MACs in the
 	  Marvell Discovery PPC/MIPS chipset family (MV643XX) and
@@ -28,6 +29,10 @@ config MV643XX_ETH
 
 	  Some boards that use the Discovery chipset are the Momenco
 	  Ocelot C and Jaguar ATX and Pegasos II.
+
+config MV643XX_ETH_FBX_FF
+	bool "fast forward mode for fbxgwrx"
+	depends on (MV643XX_ETH && IP_FFN && IPV6_FFN && IPV6_SIT_6RD)
 
 config MVMDIO
 	tristate "Marvell MDIO interface support"

@@ -376,6 +376,8 @@ static struct mtd_part *allocate_partition(struct mtd_info *master,
 	slave->mtd.oobsize = master->oobsize;
 	slave->mtd.oobavail = master->oobavail;
 	slave->mtd.subpage_sft = master->subpage_sft;
+	slave->mtd.nand_type = master->nand_type;
+	slave->mtd.nand_manufacturer = master->nand_manufacturer;
 
 	slave->mtd.name = name;
 	slave->mtd.owner = master->owner;

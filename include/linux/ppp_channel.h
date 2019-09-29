@@ -49,6 +49,9 @@ struct ppp_channel {
 /* Called by the channel when it can send some more data. */
 extern void ppp_output_wakeup(struct ppp_channel *);
 
+/* Called by the channel when it want to prevent further transmit on it */
+extern void ppp_output_stop(struct ppp_channel *);
+
 /* Called by the channel to process a received PPP packet.
    The packet should have just the 2-byte PPP protocol header. */
 extern void ppp_input(struct ppp_channel *, struct sk_buff *);

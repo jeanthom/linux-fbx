@@ -27,6 +27,7 @@
 #include <linux/export.h>
 #include <linux/io.h>
 #include <linux/uio.h>
+#include <linux/bootmem.h>
 
 #include <linux/uaccess.h>
 
@@ -373,6 +374,14 @@ static int mmap_kmem(struct file *file, struct vm_area_struct *vma)
 	return mmap_mem(file, vma);
 }
 
+static int mmap_physmem(struct file * file, struct vm_area_struct * vma)
+{
+	if (vma->vm_pgoff < max_pfn && !capable(CAP_SYS_RAWIO))
+		return -EPERM;
+
+	return mmap_mem(file, vma);
+}
+
 /*
  * This function reads the *virtual* memory as seen by the kernel.
  */
@@ -715,6 +724,11 @@ static int open_port(struct inode *inode, struct file *filp)
 	return capable(CAP_SYS_RAWIO) ? 0 : -EPERM;
 }
 
+static int open_physmem(struct inode * inode, struct file * filp)
+{
+	return 0;
+}
+
 #define zero_lseek	null_lseek
 #define full_lseek      null_lseek
 #define write_zero	write_null
@@ -779,6 +793,14 @@ static const struct file_operations full_fops = {
 	.write		= write_full,
 };
 
+static const struct file_operations __maybe_unused physmem_fops = {
+	.mmap		= mmap_physmem,
+	.open		= open_physmem,
+#ifndef CONFIG_MMU
+	.get_unmapped_area = get_unmapped_area_mem,
+#endif
+};
+
 static const struct memdev {
 	const char *name;
 	umode_t mode;
@@ -801,6 +823,9 @@ static const struct memdev {
 	 [9] = { "urandom", 0666, &urandom_fops, 0 },
 #ifdef CONFIG_PRINTK
 	[11] = { "kmsg", 0644, &kmsg_fops, 0 },
+#endif
+#ifdef CONFIG_DEVPHYSMEM
+	[16] = { "physmem", 0, &physmem_fops, FMODE_UNSIGNED_OFFSET },
 #endif
 };
 

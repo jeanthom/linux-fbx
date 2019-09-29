@@ -23,6 +23,9 @@ config MTD_TESTS
 	  WARNING: some of the tests will ERASE entire MTD device which they
 	  test. Do not use these tests unless you really know what you do.
 
+config MTD_ERASE_PRINTK
+	bool "write to kernel log when a block is erased"
+
 config MTD_REDBOOT_PARTS
 	tristate "RedBoot partition table parsing"
 	---help---
@@ -154,6 +157,17 @@ config MTD_BCM47XX_PARTS
 	help
 	  This provides partitions parser for devices based on BCM47xx
 	  boards.
+
+config MTD_FBX6HD_PARTS
+	tristate "Freebox V6 HD partitioning support"
+	help
+	  Freebox V6 HD partitioning support
+
+config MTD_FBX6HD_PARTS_WRITE_ALL
+	bool "make all partitions writeable"
+	depends on MTD_FBX6HD_PARTS
+	help
+	  Freebox V6 HD partitions support
 
 comment "User Modules And Translation Layers"
 

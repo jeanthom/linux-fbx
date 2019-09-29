@@ -211,7 +211,7 @@ void devm_mdiobus_free(struct device *dev, struct mii_bus *bus);
 struct phy_device *mdiobus_scan(struct mii_bus *bus, int addr);
 int mdiobus_read(struct mii_bus *bus, int addr, u32 regnum);
 int mdiobus_write(struct mii_bus *bus, int addr, u32 regnum, u16 val);
-
+struct mii_bus *mdio_find_bus(const char *name);
 
 #define PHY_INTERRUPT_DISABLED	0x0
 #define PHY_INTERRUPT_ENABLED	0x80000000

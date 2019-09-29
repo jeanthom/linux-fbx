@@ -19,13 +19,18 @@
 #include <linux/of_net.h>
 #include <linux/of_platform.h>
 #include <linux/slab.h>
+#include <linux/dma-mapping.h>
 #include <asm/hardware/cache-feroceon-l2.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
+#include <asm/mach-types.h>
+#include "mvebu-soc-id.h"
 #include "kirkwood.h"
 #include "kirkwood-pm.h"
 #include "common.h"
 #include "board.h"
+
+#include "fbxgw-common.h"
 
 static struct resource kirkwood_cpufreq_resources[] = {
 	[0] = {
@@ -65,6 +70,32 @@ static struct platform_device kirkwood_cpuidle = {
 static void __init kirkwood_cpuidle_init(void)
 {
 	platform_device_register(&kirkwood_cpuidle);
+}
+
+static struct resource kirkwood_coretemp_resources[] = {
+	[0] = {
+		.start  = TEMP_PHYS_BASE,
+		.end    = TEMP_PHYS_BASE + sizeof (u32) - 1,
+		.flags  = IORESOURCE_MEM,
+	},
+};
+struct platform_device kirkwood_coretemp_device = {
+	.name	    = "kirkwood-coretemp",
+	.id	    = -1,
+	.num_resources = ARRAY_SIZE(kirkwood_coretemp_resources),
+	.resource = kirkwood_coretemp_resources,
+};
+
+static void __init kirkwood_coretemp_init(void)
+{
+	u32 dev, rev;
+
+	if (mvebu_get_soc_id(&dev, &rev) < 0)
+		return;
+	if (dev != 0x6282)
+		return;
+
+	platform_device_register(&kirkwood_coretemp_device);
 }
 
 #define MV643XX_ETH_MAC_ADDR_LOW	0x0414
@@ -159,15 +190,70 @@ void kirkwood_disable_mbus_error_propagation(void)
 	writel(readl(cpu_config) & ~CPU_CONFIG_ERROR_PROP, cpu_config);
 }
 
+/*
+ * See errata. Without this work around:
+ *    "The risk is that the PCIe will not work properly."
+ */
+static void kirkwood_fe_misc_120(void)
+{
+	u32 dev, rev;
+	void __iomem *reg;
+
+	if (mvebu_get_soc_id(&dev, &rev)) {
+		pr_warn("unable to get soc id when trying to apply "
+			"FE-MISC-120\n");
+		return ;
+	}
+
+	if (dev != 0x6282)
+		/* not applicable on this device */
+		return ;
+
+	reg = ioremap(FE_MISC_120_REG, 4);
+	if (!reg) {
+		pr_warn("unable to ioremap %08x when trying to apply "
+			"FE-MISC-120.\n", FE_MISC_120_REG);
+		return ;
+	}
+
+	writel(readl(reg) | (3 << 25), reg);
+	iounmap(reg);
+}
+
+/*
+ * map the IMMR space using iotable_init, like in the old times ...
+ * As it is going to be mapped using a single 1M section, this can't
+ * be bad wrt TLB pressure.
+ */
+static struct map_desc __initdata kirkwood_io_desc[] = {
+	{
+		.virtual	= 0xfec00000,
+		.pfn		= __phys_to_pfn(0xf1000000),
+		.length		= SZ_1M,
+		.type		= MT_DEVICE,
+	},
+};
+static void __init kirkwood_map_io(void)
+{
+	iotable_init(kirkwood_io_desc, ARRAY_SIZE(kirkwood_io_desc));
+}
+
 static struct of_dev_auxdata auxdata[] __initdata = {
 	OF_DEV_AUXDATA("marvell,kirkwood-audio", 0xf10a0000,
 		       "mvebu-audio", NULL),
 	{ /* sentinel */ }
 };
 
+static void __init kirkwood_init_early(void)
+{
+	init_dma_coherent_pool_size(SZ_1M);
+}
+
 static void __init kirkwood_dt_init(void)
 {
 	kirkwood_disable_mbus_error_propagation();
+	kirkwood_fe_misc_120();
+	kirkwood_coretemp_init();
 
 	BUG_ON(mvebu_mbus_dt_init(false));
 
@@ -184,6 +270,30 @@ static void __init kirkwood_dt_init(void)
 		netxbig_init();
 
 	of_platform_populate(NULL, of_default_bus_match_table, auxdata, NULL);
+
+
+#ifdef CONFIG_FBXGW_COMMON
+	/*
+	 * run pinctrl and mvebu driver init there to control
+	 * order. we need both pinctrl and gpio controllers up and
+	 * running for fbxgw1r/fbxgw2r_init() functions.
+	 *
+	 * I'm not proud of this.
+	 */
+	{
+		extern int kirkwood_pinctrl_driver_init(void);
+		extern int mvebu_gpio_driver_init(void);
+
+		kirkwood_pinctrl_driver_init();
+		mvebu_gpio_driver_init();
+	}
+
+	if (of_machine_is_compatible("freebox,fbxgw1r"))
+		fbxgw1r_init();
+
+	if (of_machine_is_compatible("freebox,fbxgw2r"))
+		fbxgw2r_init();
+#endif
 }
 
 static const char * const kirkwood_dt_board_compat[] __initconst = {
@@ -197,3 +307,43 @@ DT_MACHINE_START(KIRKWOOD_DT, "Marvell Kirkwood (Flattened Device Tree)")
 	.restart	= mvebu_restart,
 	.dt_compat	= kirkwood_dt_board_compat,
 MACHINE_END
+
+#ifdef CONFIG_MACH_FBXGW1R
+static const char * const fbxgw1r_dt_board_compat[] = {
+	"freebox,fbxgw1r",
+	NULL,
+};
+
+MACHINE_START(FBXGW1R, "Freebox FBXGW1R (In-kernel Flattened Device Tree)")
+	.init_machine	= kirkwood_dt_init,
+	.restart = mvebu_restart,
+	.init_early = kirkwood_init_early,
+#ifdef CONFIG_PSTORE_RAM
+	.reserve = fbxgw_reserve_crash_zone,
+#endif
+	.map_io = kirkwood_map_io,
+	.dt_compat = fbxgw1r_dt_board_compat,
+MACHINE_END
+
+FDT_DESC(FBXGW1R);
+#endif
+
+#ifdef CONFIG_MACH_FBXGW2R
+static const char * const fbxgw2r_dt_board_compat[] = {
+	"freebox,fbxgw2r",
+	NULL,
+};
+
+MACHINE_START(FBXGW2R, "Freebox FBXGW2R (In-kernel Flattened Device Tree)")
+	.init_machine	= kirkwood_dt_init,
+	.restart	= mvebu_restart,
+	.init_early = kirkwood_init_early,
+#ifdef CONFIG_PSTORE_RAM
+	.reserve	= fbxgw_reserve_crash_zone,
+#endif
+	.map_io		= kirkwood_map_io,
+	.dt_compat	= fbxgw2r_dt_board_compat,
+MACHINE_END
+
+FDT_DESC(FBXGW2R);
+#endif

@@ -3051,6 +3051,16 @@ static int sky2_poll(struct napi_struct *napi, int work_limit)
 	int work_done = 0;
 	u16 idx;
 
+	if (status == 0xffffffff) {
+		/*
+		 * this may happen if hardware is removed without
+		 * being properly disabled.
+		 */
+		printk("sky2: serious hardware error.\n");
+		napi_complete(napi);
+		return 0;
+	}
+
 	if (unlikely(status & Y2_IS_ERROR))
 		sky2_err_intr(hw, status);
 

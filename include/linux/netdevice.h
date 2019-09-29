@@ -61,6 +61,20 @@ struct wireless_dev;
 struct wpan_dev;
 struct mpls_dev;
 
+#ifdef CONFIG_NETRXTHREAD
+
+#define RXTHREAD_MAX_PKTS       512
+struct krxd {
+	struct sk_buff_head	pkt_queue;
+	unsigned int		stats_pkts;
+	unsigned int		stats_dropped;
+	wait_queue_head_t	wq;
+	struct task_struct	*task;
+};
+
+extern struct krxd gkrxd[CONFIG_NETRXTHREAD_RX_QUEUE];
+#endif
+
 void netdev_set_default_ethtool_ops(struct net_device *dev,
 				    const struct ethtool_ops *ops);
 
@@ -1734,6 +1748,12 @@ struct net_device {
 
 	struct garp_port __rcu	*garp_port;
 	struct mrp_port __rcu	*mrp_port;
+
+#ifdef CONFIG_FBXBRIDGE
+	struct fbxbridge	*fbx_bridge;
+	struct fbxbridge	*fbx_bridge_port;
+	int			fbx_bridge_maybe_port;
+#endif
 
 	struct device	dev;
 	const struct attribute_group *sysfs_groups[4];

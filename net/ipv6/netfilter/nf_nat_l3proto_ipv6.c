@@ -81,6 +81,8 @@ static bool nf_nat_ipv6_manip_pkt(struct sk_buff *skb,
 				  enum nf_nat_manip_type maniptype)
 {
 	struct ipv6hdr *ipv6h;
+	const __be32 *to;
+	__be32 *from;
 	__be16 frag_off;
 	int hdroff;
 	u8 nexthdr;
@@ -100,11 +102,24 @@ static bool nf_nat_ipv6_manip_pkt(struct sk_buff *skb,
 				target, maniptype))
 		return false;
 manip_addr:
-	if (maniptype == NF_NAT_MANIP_SRC)
-		ipv6h->saddr = target->src.u3.in6;
-	else
-		ipv6h->daddr = target->dst.u3.in6;
+	if (maniptype == NF_NAT_MANIP_SRC) {
+		from = ipv6h->saddr.s6_addr32;
+		to = target->src.u3.in6.s6_addr32;
+	} else {
+		from = ipv6h->daddr.s6_addr32;
+		to = target->dst.u3.in6.s6_addr32;
+	}
 
+	if (skb->ip_summed == CHECKSUM_COMPLETE) {
+		__be32 diff[] = {
+			~from[0], ~from[1], ~from[2], ~from[3],
+			to[0], to[1], to[2], to[3],
+		};
+
+		skb->csum = ~csum_partial(diff, sizeof(diff), ~skb->csum);
+	}
+
+	memcpy(from, to, sizeof (struct in6_addr));
 	return true;
 }
 

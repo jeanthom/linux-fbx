@@ -248,3 +248,24 @@ const struct machine_desc * __init setup_machine_fdt(unsigned int dt_phys)
 
 	return mdesc;
 }
+
+/*
+ * find an ftd_desc suitable for the provided machtype. if one is
+ * found return the physical address of the matching in-kernel fdt. if
+ * none is found return the provided atags pointer.
+ */
+unsigned int setup_fdt_machtype(unsigned int machtype,
+				unsigned int atags_pointer)
+{
+	struct fdt_desc *fdesc;
+	extern struct fdt_desc __fdt_info_begin, __fdt_info_end;
+
+	for (fdesc = &__fdt_info_begin; fdesc < &__fdt_info_end; ++fdesc) {
+		if (fdesc->nr == machtype) {
+			printk("returning FDT available at %08x\n",
+			       virt_to_phys(fdesc->fdt_start));
+			return virt_to_phys(fdesc->fdt_start);
+		}
+	}
+	return atags_pointer;
+}

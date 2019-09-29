@@ -27,6 +27,11 @@
 #include <net/netfilter/nf_conntrack_helper.h>
 #include <linux/netfilter/nf_conntrack_ftp.h>
 
+#if defined(CONFIG_FREEBOX_BRIDGE) || defined(CONFIG_FREEBOX_BRIDGE_MODULE)
+#include <net/netfilter/nf_nat_helper.h>
+#include <fbxbridge.h>
+#endif
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Rusty Russell <rusty@rustcorp.com.au>");
 MODULE_DESCRIPTION("ftp connection tracking helper");
@@ -410,6 +415,17 @@ static int help(struct sk_buff *skb,
 		return NF_ACCEPT;
 	}
 
+#if defined(CONFIG_FREEBOX_BRIDGE) || defined(CONFIG_FREEBOX_BRIDGE_MODULE)
+	if (!ct_ftp_info->is_fbxbridge && skb->dev->fbx_bridge) {
+		struct fbxbridge *fbxbr;
+
+		fbxbr = skb->dev->fbx_bridge;
+		ct_ftp_info->is_fbxbridge = 1;
+		ct_ftp_info->fbxbridge_remote = ntohl(fbxbr->br_remote_ipaddr);
+		ct_ftp_info->fbxbridge_wan = fbxbr->wan_ipaddr;
+	}
+#endif
+
 	th = skb_header_pointer(skb, protoff, sizeof(_tcph), &_tcph);
 	if (th == NULL)
 		return NF_ACCEPT;
@@ -495,6 +511,50 @@ skip_nl_seq:
 	 * because we're expecting something in the other direction.
 	 * Doesn't matter unless NAT is happening.  */
 	daddr = &ct->tuplehash[!dir].tuple.dst.u3;
+
+#if defined(CONFIG_FREEBOX_BRIDGE) || defined(CONFIG_FREEBOX_BRIDGE_MODULE)
+	if (ct_ftp_info->is_fbxbridge &&
+	    search[dir][i].ftptype == NF_CT_FTP_PORT) {
+		unsigned long orig_ip_addr;
+		unsigned short orig_port;
+		char buffer[sizeof("nnn,nnn,nnn,nnn,nnn,nnn")];
+		unsigned int len;
+		__be32 addr;
+
+		/* kludge: if  we are here,  then this is a  local pkt
+		 * that has  gone through internal  fbxbridge snat.
+		 *
+		 * If we see a port  command, then we mangle packet to
+		 * change  ip  address  given  to  the  remote  bridge
+		 * address */
+
+		/* check  address  is  packet  is  the  one  fbxbridge
+		 * changed */
+		orig_ip_addr = cmd.u3.ip;
+		if (orig_ip_addr != ct_ftp_info->fbxbridge_wan)
+			goto donttouch;
+
+		/* now mangle the remote address */
+		orig_port = cmd.u.tcp.port;
+		addr = ct_ftp_info->fbxbridge_remote;
+		len = sprintf(buffer, "%u,%u,%u,%u,%u,%u",
+			      ((unsigned char *)&addr)[0],
+			      ((unsigned char *)&addr)[1],
+			      ((unsigned char *)&addr)[2],
+			      ((unsigned char *)&addr)[3],
+			      orig_port >> 8 , orig_port & 0xFF);
+
+		nf_nat_mangle_tcp_packet(skb, ct, ctinfo, matchoff,
+					 matchlen, buffer, len);
+
+		/* then adjust as if nothing happened */
+		matchlen = len;
+		cmd.u3.ip = ct_ftp_info->fbxbridge_remote;
+	}
+donttouch:
+
+#endif
+
 
 	/* Update the ftp info */
 	if ((cmd.l3num == nf_ct_l3num(ct)) &&

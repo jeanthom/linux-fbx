@@ -807,4 +807,9 @@ config INPUT_DRV2667_HAPTICS
 	  To compile this driver as a module, choose M here: the
 	  module will be called drv2667-haptics.
 
+config INPUT_SMSC_CAP1066
+	tristate "SMSC CAP1066 capacitive sensor driver"
+	select I2C
+	select INPUT_POLLDEV
+
 endif

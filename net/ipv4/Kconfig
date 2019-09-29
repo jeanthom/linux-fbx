@@ -391,6 +391,11 @@ config INET_TUNNEL
 	tristate
 	default n
 
+config INET_XFRM_GC_THRESH
+	int "IP: xfrm garbage collect threshold"
+	depends on XFRM
+	default 32768
+
 config INET_XFRM_MODE_TRANSPORT
 	tristate "IP: IPsec transport mode"
 	default y

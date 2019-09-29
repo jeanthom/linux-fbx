@@ -1,0 +1,21 @@
+#
+# Marvell device configuration
+#
+
+config NET_VENDOR_SIGMA
+	bool "Sigma Design devices"
+	default y
+	depends on TANGO2
+
+if NET_VENDOR_SIGMA
+
+config TANGO2_ENET
+	tristate "SMP863x Builtin Ethernet support"
+	select MII
+	select CRC32
+	help
+	 This option adds support for the SMP863x integrated Ethernet
+	 controller.  This driver uses NAPI and generic Linux MII
+	 support.
+
+endif # NET_VENDOR_SIGMA

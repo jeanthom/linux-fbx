@@ -8,7 +8,11 @@ source "drivers/bus/Kconfig"
 
 source "drivers/connector/Kconfig"
 
+source "drivers/fbxprocfs/Kconfig"
+
 source "drivers/mtd/Kconfig"
+
+source "drivers/fbxmtd/Kconfig"
 
 source "drivers/of/Kconfig"
 
@@ -64,6 +68,10 @@ source "drivers/pinctrl/Kconfig"
 
 source "drivers/gpio/Kconfig"
 
+source "drivers/fbxgpio/Kconfig"
+
+source "drivers/fbxjtag/Kconfig"
+
 source "drivers/w1/Kconfig"
 
 source "drivers/power/Kconfig"
@@ -71,6 +79,8 @@ source "drivers/power/Kconfig"
 source "drivers/hwmon/Kconfig"
 
 source "drivers/thermal/Kconfig"
+
+source "drivers/fbxwatchdog/Kconfig"
 
 source "drivers/watchdog/Kconfig"
 

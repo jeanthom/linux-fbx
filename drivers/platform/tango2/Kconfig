@@ -1,0 +1,30 @@
+#
+# TANGO2 devices configuration
+#
+
+menu "Tango2 devices"
+	depends on TANGO2
+
+config TANGO2_FIP
+	tristate "Front panel support"
+	select INPUT
+	---help---
+	  Tango2 FIP front panel support.
+
+config TANGO2_GPIO
+	tristate "GPIO sysfs support"
+	---help---
+	  Export GPIO attributes in sysfs.
+
+config TANGO2_IR
+	tristate "IR support"
+	---help---
+	  Tango2 IR (NEC/RC5/RC6) support.
+
+config TANGO2_FB
+	tristate "Framebuffer support"
+	depends on FB
+	---help---
+	  Tango2 framebuffer support.
+
+endmenu

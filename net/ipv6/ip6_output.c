@@ -54,6 +54,7 @@
 #include <net/icmp.h>
 #include <net/xfrm.h>
 #include <net/checksum.h>
+#include <net/dsfield.h>
 #include <linux/mroute6.h>
 
 static int ip6_finish_output2(struct sock *sk, struct sk_buff *skb)
@@ -104,6 +105,11 @@ static int ip6_finish_output2(struct sock *sk, struct sk_buff *skb)
 		}
 	}
 
+#ifdef CONFIG_IPV6_FFN
+	if (skb->ffn_state == FFN_STATE_FORWARDABLE)
+		ipv6_ffn_add(skb, IPV6_FFN_FINISH_OUT);
+#endif
+
 	rcu_read_lock_bh();
 	nexthop = rt6_nexthop((struct rt6_info *)dst, &ipv6_hdr(skb)->daddr);
 	neigh = __ipv6_neigh_lookup_noref(dst->dev, nexthop);
@@ -142,6 +148,11 @@ int ip6_output(struct sock *sk, struct sk_buff *skb)
 		kfree_skb(skb);
 		return 0;
 	}
+
+#ifdef CONFIG_IP_FFN
+	if (skb->ffn_state == FFN_STATE_FAST_FORWARDED)
+		return ip6_finish_output(sk, skb);
+#endif
 
 	return NF_HOOK_COND(NFPROTO_IPV6, NF_INET_POST_ROUTING, sk, skb,
 			    NULL, dev,
@@ -509,6 +520,8 @@ int ip6_forward(struct sk_buff *skb)
 	/* Mangling hops number delayed to point after skb COW */
 
 	hdr->hop_limit--;
+
+	skb->priority = rt_tos2priority(ipv6_get_dsfield(hdr));
 
 	IP6_INC_STATS_BH(net, ip6_dst_idev(dst), IPSTATS_MIB_OUTFORWDATAGRAMS);
 	IP6_ADD_STATS_BH(net, ip6_dst_idev(dst), IPSTATS_MIB_OUTOCTETS, skb->len);

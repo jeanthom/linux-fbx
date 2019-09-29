@@ -4,6 +4,9 @@
 
 menu "Misc devices"
 
+config WINTEGRA_MMAP
+	bool "wintegra mmap driver"
+
 config SENSORS_LIS3LV02D
 	tristate
 	depends on INPUT
@@ -418,6 +421,18 @@ config VMWARE_BALLOON
 	  To compile this driver as a module, choose M here: the
 	  module will be called vmw_balloon.
 
+config INTELCE_PIC16PMU
+	tristate "PIC16 PMU, LED, hwmon support"
+	select INPUT_POLLDEV
+	select NEW_LEDS
+	select I2C
+	select HWMON
+	select ARCH_REQUIRE_GPIOLIB
+	---help---
+	  Freebox v6 HD PIC16 PMU interface support, enables
+	  control of the on-board LEDs and reports the power status,
+	  reset status and button status.
+
 config ARM_CHARLCD
 	bool "ARM Ltd. Character LCD Driver"
 	depends on PLAT_VERSATILE
@@ -527,4 +542,6 @@ source "drivers/misc/mic/Kconfig"
 source "drivers/misc/genwqe/Kconfig"
 source "drivers/misc/echo/Kconfig"
 source "drivers/misc/cxl/Kconfig"
+source "drivers/misc/remoti/Kconfig"
+source "drivers/misc/hdmi-cec/Kconfig"
 endmenu

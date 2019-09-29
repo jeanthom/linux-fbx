@@ -38,7 +38,10 @@ rsa_generic-y += rsa.o
 rsa_generic-y += rsa_helper.o
 obj-$(CONFIG_CRYPTO_RSA) += rsa_generic.o
 
-cryptomgr-y := algboss.o testmgr.o
+cryptomgr-y := algboss.o
+ifeq ($(CONFIG_CRYPTO_BUILTIN_TEST),y)
+cryptomgr-y += testmgr.o
+endif
 
 obj-$(CONFIG_CRYPTO_MANAGER2) += cryptomgr.o
 obj-$(CONFIG_CRYPTO_USER) += crypto_user.o

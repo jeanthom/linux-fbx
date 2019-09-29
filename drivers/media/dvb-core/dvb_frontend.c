@@ -875,6 +875,7 @@ static void dvb_frontend_stop(struct dvb_frontend *fe)
 	if (fe->exit != DVB_FE_DEVICE_REMOVED)
 		fe->exit = DVB_FE_NORMAL_EXIT;
 	mb();
+	wake_up_all(&fepriv->events.wait_queue);
 
 	if (!fepriv->thread)
 		return;
@@ -2536,6 +2537,9 @@ static unsigned int dvb_frontend_poll(struct file *file, struct poll_table_struc
 	dev_dbg_ratelimited(fe->dvb->device, "%s:\n", __func__);
 
 	poll_wait (file, &fepriv->events.wait_queue, wait);
+
+	if (fe->exit)
+		return POLLERR | POLLHUP;
 
 	if (fepriv->events.eventw != fepriv->events.eventr)
 		return (POLLIN | POLLRDNORM | POLLPRI);

@@ -279,8 +279,10 @@ static struct sock *__unix_find_socket_byname(struct net *net,
 	sk_for_each(s, &unix_socket_table[hash ^ type]) {
 		struct unix_sock *u = unix_sk(s);
 
+#ifdef UNIX_ABSTRACT_IGNORE_NETNS
 		if (!net_eq(sock_net(s), net))
 			continue;
+#endif
 
 		if (u->addr->len == len &&
 		    !memcmp(u->addr->name, sunname, len))

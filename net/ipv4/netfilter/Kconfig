@@ -5,6 +5,13 @@
 menu "IP: Netfilter Configuration"
 	depends on INET && NETFILTER
 
+config IP_FFN
+	bool "IP: Fast forwarding and NAT"
+
+config IP_FFN_PROCFS
+	bool "IP: Fast forwarding and NAT /proc/net entries"
+	depends on IP_FFN
+
 config NF_DEFRAG_IPV4
 	tristate
 	default n

@@ -41,6 +41,15 @@ config MTD_SM_COMMON
 	tristate
 	default n
 
+config MTD_FORCE_BAD_BLOCK_ERASE
+	bool "Force erase on bad blocks (useful for bootloader parts)"
+	depends on MTD_NAND
+	default n
+	help
+	  Enable this option only when you need to force an erase on
+	  blocks being marked as "bad" by Linux (i.e: other ECC/bad block
+	  marker layout).
+
 config MTD_NAND_DENALI
         tristate "Support Denali NAND controller"
         depends on HAS_DMA
@@ -537,5 +546,10 @@ config MTD_NAND_HISI504
 	depends on HAS_DMA
 	help
 	  Enables support for NAND controller on Hisilicon SoC Hip04.
+
+config MTD_NAND_DENALI_FBX
+	tristate "NAND Denali controller support"
+	depends on MTD_NAND && PCI
+	default n
 
 endif # MTD_NAND

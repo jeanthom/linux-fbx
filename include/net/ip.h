@@ -518,6 +518,20 @@ static inline struct sk_buff *ip_check_defrag(struct sk_buff *skb, u32 user)
 int ip_frag_mem(struct net *net);
 
 /*
+ *     Functions provided by ip_ffn.c
+ */
+
+enum {
+	IP_FFN_FINISH_OUT,
+	IP_FFN_LOCAL_IN,
+};
+
+extern void ip_ffn_init(void);
+extern int ip_ffn_process(struct sk_buff *skb);
+extern void ip_ffn_add(struct sk_buff *skb, int when);
+extern void ip_ffn_flush_all(void);
+
+/*
  *	Functions provided by ip_forward.c
  */
  

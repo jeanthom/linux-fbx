@@ -128,6 +128,14 @@
 #define SIOCSHWTSTAMP	0x89b0		/* set and get config		*/
 #define SIOCGHWTSTAMP	0x89b1		/* get config			*/
 
+/* fbxdiverter call */
+#define SIOCGFBXDIVERT  0x89c0		/* fbxdiverter support          */
+#define SIOCSFBXDIVERT  0x89c1		/* Set fbxdiverter options      */
+
+/* fbxbridge call */
+#define SIOCGFBXBRIDGE	0x89b2		/* fbxbridge support          */
+#define SIOCSFBXBRIDGE	0x89b3		/* Set fbxbridge options      */
+
 /* Device private ioctl calls */
 
 /*

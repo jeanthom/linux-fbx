@@ -189,15 +189,61 @@ struct ic_device {
 static struct ic_device *ic_first_dev __initdata;	/* List of open device */
 static struct net_device *ic_dev __initdata;		/* Selected device */
 
-static bool __init ic_is_init_dev(struct net_device *dev)
+static bool __init ic_is_init_dev(struct net_device *dev, bool partial)
 {
+	char *p = NULL;
+	bool ret;
+
 	if (dev->flags & IFF_LOOPBACK)
 		return false;
-	return user_dev_name[0] ? !strcmp(dev->name, user_dev_name) :
+
+	if (partial) {
+		p = strchr(user_dev_name, '.');
+		if (p)
+			*p = 0;
+	}
+
+	ret = false;
+	if (user_dev_name[0] ? !strcmp(dev->name, user_dev_name) :
 	    (!(dev->flags & IFF_LOOPBACK) &&
 	     (dev->flags & (IFF_POINTOPOINT|IFF_BROADCAST)) &&
-	     strncmp(dev->name, "dummy", 5));
+	     strncmp(dev->name, "dummy", 5)))
+		ret = true;
+	if (p)
+		*p = '.';
+	return ret;
 }
+
+#ifdef CONFIG_VLAN_8021Q
+int register_vlan_device(struct net_device *real_dev, u16 vlan_id);
+
+static void __init prepare_vlan(void)
+{
+	unsigned short oflags;
+	struct net_device *dev;
+	char *p;
+	u16 vid;
+
+	if (!strchr(user_dev_name, '.'))
+		return;
+
+	p = strchr(user_dev_name, '.');
+	*p = 0;
+	vid = simple_strtoul(p + 1, NULL, 10);
+	dev = __dev_get_by_name(&init_net, user_dev_name);
+	if (!dev)
+		goto fail;
+
+	oflags = dev->flags;
+	if (dev_change_flags(dev, oflags | IFF_UP) < 0)
+		goto fail;
+
+	register_vlan_device(dev, vid);
+
+fail:
+	*p = '.';
+}
+#endif
 
 static int __init ic_open_devs(void)
 {
@@ -217,8 +263,13 @@ static int __init ic_open_devs(void)
 			pr_err("IP-Config: Failed to open %s\n", dev->name);
 	}
 
+#ifdef CONFIG_VLAN_8021Q
+	/* register vlan device if needed */
+	prepare_vlan();
+#endif
+
 	for_each_netdev(&init_net, dev) {
-		if (ic_is_init_dev(dev)) {
+		if (ic_is_init_dev(dev, false)) {
 			int able = 0;
 			if (dev->mtu >= 364)
 				able |= IC_BOOTP;
@@ -267,7 +318,7 @@ static int __init ic_open_devs(void)
 		int wait, elapsed;
 
 		for_each_netdev(&init_net, dev)
-			if (ic_is_init_dev(dev) && netif_carrier_ok(dev))
+			if (ic_is_init_dev(dev, false) && netif_carrier_ok(dev))
 				goto have_carrier;
 
 		msleep(1);
@@ -720,8 +771,10 @@ ic_dhcp_init_options(u8 *options)
 			e += len;
 		}
 		if (*vendor_class_identifier) {
+#ifdef IPCONFIG_DEBUG
 			pr_info("DHCP: sending class identifier \"%s\"\n",
 				vendor_class_identifier);
+#endif
 			*e++ = 60;	/* Class-identifier */
 			len = strlen(vendor_class_identifier);
 			*e++ = len;
@@ -1379,7 +1432,7 @@ static int __init wait_for_devices(void)
 
 		rtnl_lock();
 		for_each_netdev(&init_net, dev) {
-			if (ic_is_init_dev(dev)) {
+			if (ic_is_init_dev(dev, true)) {
 				found = 1;
 				break;
 			}

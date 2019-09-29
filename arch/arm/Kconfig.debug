@@ -488,6 +488,10 @@ choice
 
 		  Please adjust DEBUG_UART_PHYS and DEBUG_UART_BASE configuration
 		  options based on your needs.
+	config DEBUG_FBXGWR_UART
+		bool "Kernel low-level debugging message via FBXGW1R/FBXGW2R UART"
+		depends on MACH_FBXGW2R || MACH_FBXGW1R
+		select DEBUG_UART_8250
 
 	config DEBUG_MVEBU_UART0
 		bool "Kernel low-level debugging messages via MVEBU UART0 (old bootloaders)"
@@ -1423,6 +1427,7 @@ config DEBUG_UART_PHYS
 	default 0xc8000000 if ARCH_IXP4XX && !CPU_BIG_ENDIAN
 	default 0xc8000003 if ARCH_IXP4XX && CPU_BIG_ENDIAN
 	default 0xd0000000 if ARCH_SPEAR3XX || ARCH_SPEAR6XX
+	default 0xfec12100 if DEBUG_FBXGWR_UART
 	default 0xd0012000 if DEBUG_MVEBU_UART0
 	default 0xc81004c0 if DEBUG_MESON_UARTAO
 	default 0xd4017000 if DEBUG_MMP_UART2
@@ -1441,6 +1446,7 @@ config DEBUG_UART_PHYS
 	default 0xf1012100 if DEBUG_MVEBU_UART1_ALTERNATE
 	default 0xf1012000 if ARCH_DOVE || ARCH_MV78XX0 || \
 				ARCH_ORION5X
+	default 0xf1012100 if DEBUG_FBXGWR_UART
 	default 0xf7fc9000 if DEBUG_BERLIN_UART
 	default 0xf8b00000 if DEBUG_HIX5HD2_UART
 	default 0xf991e000 if DEBUG_QCOM_UARTDM

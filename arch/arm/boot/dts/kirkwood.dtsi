@@ -99,9 +99,26 @@
 				marvell,function = "spi";
 			};
 
+			pmx_tdm_spi: pmx-tdm-spi {
+				marvell,pins = "mpp24", "mpp25", "mpp26",
+					"mpp27";
+				marvell,function = "tdm";
+			};
+
+			pmx_alt_tdm_spi: pmx-alt-tdm-spi {
+				marvell,pins = "mpp39", "mpp40", "mpp41",
+					"mpp42";
+				marvell,function = "tdm";
+			};
+
 			pmx_twsi0: pmx-twsi0 {
 				marvell,pins = "mpp8", "mpp9";
 				marvell,function = "twsi0";
+			};
+
+			pmx_twsi1: pmx-twsi1 {
+				marvell,pins = "mpp36", "mpp37";
+				marvell,function = "twsi1";
 			};
 
 			/*
@@ -138,6 +155,18 @@
 			status = "disabled";
 		};
 
+		tdm_spi0: tdm_spi@d0000 {
+			compatible = "marvell,orion-tdm-spi";
+			#address-cells = <1>;
+			#size-cells = <0>;
+			reg = <0xd0000 65536>;
+			clocks = <&gate_clk 20>;
+			pinctrl-0 = <&pmx_tdm_spi>;
+			pinctrl-names = "default";
+			fbx,cs-gpios = <(-1) (-1) >;
+			status = "disabled";
+		};
+
 		gpio0: gpio@10100 {
 			compatible = "marvell,orion-gpio";
 			#gpio-cells = <2>;
@@ -171,6 +200,19 @@
 			clock-frequency = <100000>;
 			clocks = <&gate_clk 7>;
 			pinctrl-0 = <&pmx_twsi0>;
+			pinctrl-names = "default";
+			status = "disabled";
+		};
+
+		i2c1: i2c@11100 {
+			compatible = "marvell,mv64xxx-i2c";
+			reg = <0x11000 0x20>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			interrupts = <32>;
+			clock-frequency = <100000>;
+			clocks = <&gate_clk 7>;
+			pinctrl-0 = <&pmx_twsi1>;
 			pinctrl-names = "default";
 			status = "disabled";
 		};
@@ -307,6 +349,7 @@
 			reg = <0x72000 0x4000>;
 			clocks = <&gate_clk 0>;
 			marvell,tx-checksum-limit = <1600>;
+			marvell,unit = <0>;
 			status = "disabled";
 
 			eth0port: ethernet0-port@0 {
@@ -338,6 +381,7 @@
 			reg = <0x76000 0x4000>;
 			clocks = <&gate_clk 19>;
 			marvell,tx-checksum-limit = <1600>;
+			marvell,unit = <1>;
 			pinctrl-0 = <&pmx_ge1>;
 			pinctrl-names = "default";
 			status = "disabled";

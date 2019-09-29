@@ -136,18 +136,6 @@ static int it913x_init(struct dvb_frontend *fe)
 	if (ret)
 		goto err;
 
-	ret = regmap_write(dev->regmap, 0x80ec57, 0x00);
-	if (ret)
-		goto err;
-
-	ret = regmap_write(dev->regmap, 0x80ec58, 0x00);
-	if (ret)
-		goto err;
-
-	ret = regmap_write(dev->regmap, 0x80ec40, 0x01);
-	if (ret)
-		goto err;
-
 	dev->active = true;
 
 	return 0;

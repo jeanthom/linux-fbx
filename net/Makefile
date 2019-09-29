@@ -36,6 +36,12 @@ obj-$(CONFIG_SUNRPC)		+= sunrpc/
 obj-$(CONFIG_AF_RXRPC)		+= rxrpc/
 obj-$(CONFIG_ATM)		+= atm/
 obj-$(CONFIG_L2TP)		+= l2tp/
+ifneq ($(CONFIG_FBXATM),)
+obj-y				+= fbxatm/
+endif
+ifneq ($(CONFIG_FBXBRIDGE),)
+obj-y				+= fbxbridge/
+endif
 obj-$(CONFIG_DECNET)		+= decnet/
 obj-$(CONFIG_PHONET)		+= phonet/
 ifneq ($(CONFIG_VLAN_8021Q),)

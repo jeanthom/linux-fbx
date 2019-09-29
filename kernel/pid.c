@@ -84,7 +84,7 @@ struct pid_namespace init_pid_ns = {
 	.ns.ops = &pidns_operations,
 #endif
 };
-EXPORT_SYMBOL_GPL(init_pid_ns);
+EXPORT_SYMBOL(init_pid_ns);
 
 /*
  * Note: disable interrupts while the pidmap_lock is held as an

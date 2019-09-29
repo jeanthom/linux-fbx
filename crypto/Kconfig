@@ -108,6 +108,10 @@ config CRYPTO_RSA
 	help
 	  Generic implementation of the RSA public key algorithm.
 
+config CRYPTO_BUILTIN_TEST
+	bool "Include builtin tests"
+	default y
+
 config CRYPTO_MANAGER
 	tristate "Cryptographic algorithm manager"
 	select CRYPTO_MANAGER2

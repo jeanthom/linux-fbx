@@ -190,6 +190,9 @@ typedef enum {
  */
 #define NAND_USE_BOUNCE_BUFFER	0x00100000
 
+/* NAND controller does not want RNDOUT commands, even in NAND_ECC_SOFT */
+#define NAND_NO_RNDOUT		0x00800000
+
 /* Options set by nand scan */
 /* Nand scan has allocated controller struct */
 #define NAND_CONTROLLER_ALLOC	0x80000000

@@ -211,6 +211,8 @@ int udp_lib_get_port(struct sock *sk, unsigned short snum,
 				       const struct sock *sk2),
 		     unsigned int hash2_nulladdr)
 {
+	struct sock *sk2;
+	struct hlist_nulls_node *node;
 	struct udp_hslot *hslot, *hslot2;
 	struct udp_table *udptable = sk->sk_prot->h.udp_table;
 	int    error = 1;
@@ -290,6 +292,48 @@ found:
 	inet_sk(sk)->inet_num = snum;
 	udp_sk(sk)->udp_port_hash = snum;
 	udp_sk(sk)->udp_portaddr_hash ^= snum;
+
+	/* resolve udp reuse conflict */
+	if (sk->sk_reuse) {
+		bool found;
+
+		found = false;
+		sk_nulls_for_each(sk2, node, &hslot->head) {
+			if (!net_eq(sock_net(sk2), net) ||
+			    sk2 == sk ||
+			    (udp_sk(sk2)->udp_port_hash != snum))
+				continue;
+
+			if (sk2->sk_bound_dev_if &&
+			    sk->sk_bound_dev_if &&
+			    sk2->sk_bound_dev_if != sk->sk_bound_dev_if)
+				continue;
+
+			if (!(*saddr_comp)(sk, sk2))
+				continue;
+
+			found = true;
+			break;
+		}
+
+		sk_nulls_for_each(sk2, node, &hslot->head) {
+			if (!net_eq(sock_net(sk2), net) ||
+			    sk2 == sk ||
+			    (udp_sk(sk2)->udp_port_hash != snum))
+				continue;
+
+			if (sk2->sk_bound_dev_if &&
+			    sk->sk_bound_dev_if &&
+			    sk2->sk_bound_dev_if != sk->sk_bound_dev_if)
+				continue;
+
+			if (!(*saddr_comp)(sk, sk2))
+				continue;
+
+			sk->sk_reuse_conflict = found;
+		}
+	}
+
 	if (sk_unhashed(sk)) {
 		sk_nulls_add_node_rcu(sk, &hslot->head);
 		hslot->count++;
@@ -1712,6 +1756,56 @@ start_lookup:
 	return 0;
 }
 
+/*
+ *	Unicast goes to one listener and all sockets with dup flag
+ *
+ *	Note: called only from the BH handler context.
+ */
+static int __udp4_lib_uc_conflict_deliver(struct net *net, struct sk_buff *skb,
+					  struct udphdr  *uh,
+					  __be32 saddr, __be32 daddr,
+					  struct udp_table *udptable)
+{
+	struct sock *sk, *stack[256 / sizeof(struct sock *)];
+	struct udp_hslot *hslot = udp_hashslot(udptable, net, ntohs(uh->dest));
+	struct hlist_nulls_node *node;
+	int dif;
+	unsigned int count = 0, non_dup_count = 0;
+
+	spin_lock(&hslot->lock);
+	sk = sk_nulls_head(&hslot->head);
+	dif = skb->dev->ifindex;
+	sk_nulls_for_each(sk, node, &hslot->head) {
+		if (!sock_flag(sk, SOCK_UDP_DUP_UNICAST)) {
+			if (!non_dup_count) {
+				stack[count++] = sk;
+				sock_hold(sk);
+			}
+			non_dup_count = 1;
+		} else {
+			stack[count++] = sk;
+			sock_hold(sk);
+		}
+
+		if (unlikely(count == ARRAY_SIZE(stack))) {
+			flush_stack(stack, count, skb, ~0);
+			count = 0;
+		}
+	}
+
+	spin_unlock(&hslot->lock);
+
+	/*
+	 * do the slow work with no lock held
+	 */
+	if (count) {
+		flush_stack(stack, count, skb, count - 1);
+	} else {
+		kfree_skb(skb);
+	}
+	return 0;
+}
+
 /* Initialize UDP checksum. If exited with zero value (success),
  * CHECKSUM_UNNECESSARY means, that no more checks are required.
  * Otherwise, csum completion requires chacksumming packet body,
@@ -1780,6 +1874,13 @@ int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 
 		if (unlikely(sk->sk_rx_dst != dst))
 			udp_sk_rx_dst_set(sk, dst);
+
+		if (sk->sk_reuse_conflict) {
+			sock_put(sk);
+			return __udp4_lib_uc_conflict_deliver(net, skb, uh,
+							      saddr, daddr,
+							      udptable);
+		}
 
 		ret = udp_queue_rcv_skb(sk, skb);
 		sock_put(sk);

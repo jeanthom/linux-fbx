@@ -79,6 +79,7 @@ obj-$(CONFIG_RC_MAP) += rc-adstech-dvb-t-pci.o \
 			rc-pv951.o \
 			rc-hauppauge.o \
 			rc-rc6-mce.o \
+			rc-rc6-freebox.o \
 			rc-real-audio-220-32-keys.o \
 			rc-reddo.o \
 			rc-snapstream-firefly.o \

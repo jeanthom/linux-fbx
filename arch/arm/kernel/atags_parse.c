@@ -236,3 +236,22 @@ setup_machine_tags(phys_addr_t __atags_pointer, unsigned int machine_nr)
 
 	return mdesc;
 }
+
+/*
+ * parse only freebox tags.
+ */
+void freebox_atags_wa(unsigned int atags_pointer)
+{
+	const struct tag *t = phys_to_virt(atags_pointer);
+
+	if (t->hdr.tag != ATAG_CORE)
+		return ;
+
+	for (; t->hdr.size; t = tag_next(t))
+		if (t->hdr.tag == ATAG_FBXSERIAL ||
+		    t->hdr.tag == ATAG_LOADER_VERSION ||
+		    t->hdr.tag == ATAG_INITRD2 ||
+		    t->hdr.tag == ATAG_BOOT_INFO) {
+			parse_tag(t);
+		}
+}

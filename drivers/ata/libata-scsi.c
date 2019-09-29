@@ -3693,7 +3693,7 @@ int ata_scsi_add_hosts(struct ata_host *host, struct scsi_host_template *sht)
 			goto err_add;
 
 		rc = scsi_add_host_with_dma(ap->scsi_host,
-						&ap->tdev, ap->host->dev);
+					    host->dev, host->dev);
 		if (rc)
 			goto err_add;
 	}

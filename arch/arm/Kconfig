@@ -1843,6 +1843,14 @@ config ATAGS
 	  to remove ATAGS support from your kernel binary.  If unsure,
 	  leave this to y.
 
+config MACHTYPE_FDT
+	bool "Select FDT to use depending on machine type"
+	select USE_OF
+	help
+	  With this option set, FDTs are embedded into the kernel for
+	  the selected machines. The machtype given by the bootloader
+	  is used to select the fdt to use.
+
 config DEPRECATED_PARAM_STRUCT
 	bool "Provide old way to pass kernel parameters"
 	depends on ATAGS

@@ -2771,6 +2771,7 @@ int nand_erase_nand(struct mtd_info *mtd, struct erase_info *instr,
 
 	while (len) {
 		/* Check if we have a bad block, we do not erase bad blocks! */
+#ifndef CONFIG_MTD_FORCE_BAD_BLOCK_ERASE
 		if (nand_block_checkbad(mtd, ((loff_t) page) <<
 					chip->page_shift, 0, allowbbt)) {
 			pr_warn("%s: attempt to erase a bad block at page 0x%08x\n",
@@ -2778,6 +2779,7 @@ int nand_erase_nand(struct mtd_info *mtd, struct erase_info *instr,
 			instr->state = MTD_ERASE_FAILED;
 			goto erase_exit;
 		}
+#endif
 
 		/*
 		 * Invalidate the page cache, if we erase the block which
@@ -3641,6 +3643,7 @@ static struct nand_flash_dev *nand_get_flash_type(struct mtd_info *mtd,
 	int busw;
 	int i, maf_idx;
 	u8 id_data[8];
+	int ret;
 
 	/* Select the device */
 	chip->select_chip(mtd, 0);
@@ -3775,6 +3778,17 @@ ident_done:
 	if (mtd->writesize > 512 && chip->cmdfunc == nand_command)
 		chip->cmdfunc = nand_command_lp;
 
+	mtd->nand_type = kstrdup(type->name, GFP_KERNEL);
+	if (!mtd->nand_type)
+		return ERR_PTR(-ENOMEM);
+
+	mtd->nand_manufacturer = kstrdup(nand_manuf_ids[maf_idx].name,
+					 GFP_KERNEL);
+	if (!mtd->nand_manufacturer) {
+		ret = -ENOMEM;
+		goto out_nand_type;
+	}
+
 	pr_info("device found, Manufacturer ID: 0x%02x, Chip ID: 0x%02x\n",
 		*maf_id, *dev_id);
 
@@ -3792,6 +3806,11 @@ ident_done:
 		(int)(chip->chipsize >> 20), nand_is_slc(chip) ? "SLC" : "MLC",
 		mtd->erasesize >> 10, mtd->writesize, mtd->oobsize);
 	return type;
+
+out_nand_type:
+	kfree(mtd->nand_type);
+
+	return ERR_PTR(ret);
 }
 
 static int nand_dt_init(struct mtd_info *mtd, struct nand_chip *chip,
@@ -3844,6 +3863,7 @@ int nand_scan_ident(struct mtd_info *mtd, int maxchips,
 	int i, nand_maf_id, nand_dev_id;
 	struct nand_chip *chip = mtd->priv;
 	struct nand_flash_dev *type;
+	int err;
 	int ret;
 
 	if (chip->dn) {
@@ -3863,7 +3883,8 @@ int nand_scan_ident(struct mtd_info *mtd, int maxchips,
 		if (!(chip->options & NAND_SCAN_SILENT_NODEV))
 			pr_warn("No NAND device found\n");
 		chip->select_chip(mtd, -1);
-		return PTR_ERR(type);
+		err = PTR_ERR(type);
+		goto out_error;
 	}
 
 	chip->select_chip(mtd, -1);
@@ -3891,6 +3912,14 @@ int nand_scan_ident(struct mtd_info *mtd, int maxchips,
 	mtd->size = i * chip->chipsize;
 
 	return 0;
+
+out_error:
+	if (mtd->nand_type)
+		kfree(mtd->nand_type);
+	if (mtd->nand_manufacturer)
+		kfree(mtd->nand_manufacturer);
+
+	return err;
 }
 EXPORT_SYMBOL(nand_scan_ident);
 
@@ -4066,9 +4095,13 @@ int nand_scan_tail(struct mtd_info *mtd)
 		ecc->read_page = nand_read_page_swecc;
 		ecc->read_subpage = nand_read_subpage;
 		ecc->write_page = nand_write_page_swecc;
+		if (!ecc->read_page_raw)
 		ecc->read_page_raw = nand_read_page_raw;
+		if (!ecc->write_page_raw)
 		ecc->write_page_raw = nand_write_page_raw;
+		if (!ecc->read_oob)
 		ecc->read_oob = nand_read_oob_std;
+		if (!ecc->write_oob)
 		ecc->write_oob = nand_write_oob_std;
 		if (!ecc->size)
 			ecc->size = 256;
@@ -4101,6 +4134,7 @@ int nand_scan_tail(struct mtd_info *mtd)
 		}
 
 		/* See nand_bch_init() for details. */
+		if (!ecc->bytes)
 		ecc->bytes = DIV_ROUND_UP(
 				ecc->strength * fls(8 * ecc->size), 8);
 		ecc->priv = nand_bch_init(mtd, ecc->size, ecc->bytes,
@@ -4186,7 +4220,7 @@ int nand_scan_tail(struct mtd_info *mtd)
 	switch (ecc->mode) {
 	case NAND_ECC_SOFT:
 	case NAND_ECC_SOFT_BCH:
-		if (chip->page_shift > 9)
+		if (chip->page_shift > 9 && !(chip->options & NAND_NO_RNDOUT))
 			chip->options |= NAND_SUBPAGE_READ;
 		break;
 

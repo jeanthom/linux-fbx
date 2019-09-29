@@ -201,6 +201,11 @@ static int ip_finish_output2(struct sock *sk, struct sk_buff *skb)
 		skb = skb2;
 	}
 
+#ifdef CONFIG_IP_FFN
+	if (skb->ffn_state == FFN_STATE_FORWARDABLE)
+		ip_ffn_add(skb, IP_FFN_FINISH_OUT);
+#endif
+
 	rcu_read_lock_bh();
 	nexthop = (__force u32) rt_nexthop(rt, ip_hdr(skb)->daddr);
 	neigh = __ipv4_neigh_lookup_noref(dev, nexthop);
@@ -208,7 +213,6 @@ static int ip_finish_output2(struct sock *sk, struct sk_buff *skb)
 		neigh = __neigh_create(&arp_tbl, &nexthop, dev, false);
 	if (!IS_ERR(neigh)) {
 		int res = dst_neigh_output(dst, neigh, skb);
-
 		rcu_read_unlock_bh();
 		return res;
 	}
@@ -352,6 +356,11 @@ int ip_output(struct sock *sk, struct sk_buff *skb)
 
 	skb->dev = dev;
 	skb->protocol = htons(ETH_P_IP);
+
+#ifdef CONFIG_IP_FFN
+	if (skb->ffn_state == FFN_STATE_FAST_FORWARDED)
+		return ip_finish_output(sk, skb);
+#endif
 
 	return NF_HOOK_COND(NFPROTO_IPV4, NF_INET_POST_ROUTING, sk, skb,
 			    NULL, dev,
@@ -1605,5 +1614,8 @@ void __init ip_init(void)
 
 #if defined(CONFIG_IP_MULTICAST)
 	igmp_mc_init();
+#endif
+#ifdef CONFIG_IP_FFN
+	ip_ffn_init();
 #endif
 }

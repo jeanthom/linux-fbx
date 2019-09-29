@@ -328,6 +328,14 @@ void nf_ct_tmpl_free(struct nf_conn *tmpl)
 }
 EXPORT_SYMBOL_GPL(nf_ct_tmpl_free);
 
+#ifdef CONFIG_IP_FFN
+extern void ip_ffn_ct_destroy(struct nf_conn *ct);
+#endif
+
+#ifdef CONFIG_IPV6_FFN
+extern void ipv6_ffn_ct_destroy(struct nf_conn *ct);
+#endif
+
 static void
 destroy_conntrack(struct nf_conntrack *nfct)
 {
@@ -338,6 +346,15 @@ destroy_conntrack(struct nf_conntrack *nfct)
 	pr_debug("destroy_conntrack(%p)\n", ct);
 	NF_CT_ASSERT(atomic_read(&nfct->use) == 0);
 	NF_CT_ASSERT(!timer_pending(&ct->timeout));
+
+#ifdef CONFIG_IP_FFN
+	if (ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.src.l3num == AF_INET)
+		ip_ffn_ct_destroy(ct);
+#endif
+#ifdef CONFIG_IPV6_FFN
+	if (ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple.src.l3num == AF_INET6)
+		ipv6_ffn_ct_destroy(ct);
+#endif
 
 	if (unlikely(nf_ct_is_template(ct))) {
 		nf_ct_tmpl_free(ct);

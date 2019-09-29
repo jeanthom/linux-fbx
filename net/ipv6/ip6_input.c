@@ -182,6 +182,11 @@ int ipv6_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt
 	/* Must drop socket now because of tproxy. */
 	skb_orphan(skb);
 
+#ifdef CONFIG_IPV6_FFN
+	if (!ipv6_ffn_process(skb))
+		return NET_RX_SUCCESS;
+#endif
+
 	return NF_HOOK(NFPROTO_IPV6, NF_INET_PRE_ROUTING, NULL, skb,
 		       dev, NULL,
 		       ip6_rcv_finish);
@@ -198,7 +203,7 @@ drop:
  */
 
 
-static int ip6_input_finish(struct sock *sk, struct sk_buff *skb)
+int ip6_input_finish(struct sock *sk, struct sk_buff *skb)
 {
 	struct net *net = dev_net(skb_dst(skb)->dev);
 	const struct inet6_protocol *ipprot;
@@ -206,6 +211,11 @@ static int ip6_input_finish(struct sock *sk, struct sk_buff *skb)
 	unsigned int nhoff;
 	int nexthdr;
 	bool raw;
+
+#ifdef CONFIG_IPV6_FFN
+	if (skb->ffn_state == FFN_STATE_FORWARDABLE)
+		ipv6_ffn_add(skb, IPV6_FFN_LOCAL_IN);
+#endif
 
 	/*
 	 *	Parse extension headers

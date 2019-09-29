@@ -1033,7 +1033,8 @@ static int tcp_packet(struct nf_conn *ct,
 		break;
 	}
 
-	if (!tcp_in_window(ct, &ct->proto.tcp, dir, index,
+	if (!ct->proto.tcp.no_window_track &&
+	    !tcp_in_window(ct, &ct->proto.tcp, dir, index,
 			   skb, dataoff, th, pf)) {
 		spin_unlock_bh(&ct->lock);
 		return -NF_ACCEPT;
@@ -1098,6 +1099,29 @@ static int tcp_packet(struct nf_conn *ct,
 
 	return NF_ACCEPT;
 }
+
+#ifdef CONFIG_IP_FFN
+int external_tcpv4_packet(struct nf_conn *ct,
+			  const struct sk_buff *skb,
+			  unsigned int dataoff,
+			  enum ip_conntrack_info ctinfo)
+{
+	return tcp_packet(ct, skb, dataoff, ctinfo, AF_INET, 0,
+			  tcp_get_timeouts(nf_ct_net(ct)));
+}
+#endif
+
+#ifdef CONFIG_IPV6_FFN
+int external_tcpv6_packet(struct nf_conn *ct,
+			  const struct sk_buff *skb,
+			  unsigned int dataoff,
+			  enum ip_conntrack_info ctinfo)
+{
+	return tcp_packet(ct, skb, dataoff, ctinfo, AF_INET6, 0,
+			  tcp_get_timeouts(nf_ct_net(ct)));
+}
+#endif
+
 
 /* Called when a new connection for this protocol found. */
 static bool tcp_new(struct nf_conn *ct, const struct sk_buff *skb,

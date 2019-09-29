@@ -395,6 +395,12 @@ int br_fdb_fillbuf(struct net_bridge *br, void *buf, unsigned long count,
 		   unsigned long off);
 int br_fdb_insert(struct net_bridge *br, struct net_bridge_port *source,
 		  const unsigned char *addr, u16 vid);
+struct net_bridge_fdb_entry *br_fdb_find(struct net_bridge *br,
+					 const unsigned char *addr,
+					 __u16 vid);
+bool br_fdb_update_only(struct net_bridge *br,
+			struct net_bridge_port *source,
+			const unsigned char *addr);
 void br_fdb_update(struct net_bridge *br, struct net_bridge_port *source,
 		   const unsigned char *addr, u16 vid, bool added_by_user);
 

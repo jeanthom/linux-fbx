@@ -347,7 +347,9 @@ static struct drr_class *drr_classify(struct sk_buff *skb, struct Qdisc *sch,
 			cl = drr_find_class(sch, res.classid);
 		return cl;
 	}
-	return NULL;
+
+	/* default to first minor if it exists, or drop */
+	return drr_find_class(sch, TC_H_MAKE(TC_H_MAJ(sch->handle), 1));
 }
 
 static int drr_enqueue(struct sk_buff *skb, struct Qdisc *sch)

@@ -311,6 +311,11 @@ mv64xxx_i2c_fsm(struct mv64xxx_i2c_data *drv_data, u32 status)
 	case MV64XXX_I2C_STATUS_MAST_WR_NO_ACK: /* 30 */
 	case MV64XXX_I2C_STATUS_MAST_RD_ADDR_NO_ACK: /* 48 */
 		/* Doesn't seem to be a device at other end */
+		dev_dbg(&drv_data->adapter.dev,
+			"mv64xxx_i2c_fsm: got no ack -- state: 0x%x, "
+			"status: 0x%x, addr: 0x%x, flags: 0x%x\n",
+			 drv_data->state, status, drv_data->msg->addr,
+			 drv_data->msg->flags);
 		drv_data->action = MV64XXX_I2C_ACTION_SEND_STOP;
 		drv_data->state = MV64XXX_I2C_STATE_IDLE;
 		drv_data->rc = -ENXIO;
@@ -572,6 +577,34 @@ mv64xxx_i2c_execute_msg(struct mv64xxx_i2c_data *drv_data, struct i2c_msg *msg,
 				int is_last)
 {
 	unsigned long	flags;
+	int limit;
+
+	/*
+	 * wait for (re)start/stop condition to clear from last
+	 * transfer if any
+	 */
+	limit = 1000;
+	do {
+		u32 val;
+
+		val = readl(drv_data->reg_base + drv_data->reg_offsets.control);
+		if (!(val & (MV64XXX_I2C_REG_CONTROL_STOP |
+			     MV64XXX_I2C_REG_CONTROL_STOP)))
+			break;
+
+		udelay(1);
+	} while (limit-- > 0);
+
+	if (limit < 0) {
+		dev_err(&drv_data->adapter.dev,
+			"mv64xxx: start/stop bit won't clear\n");
+	}
+
+	/* according to datasheet, controller is buggy when you do
+	 * register polling and it says to always wait for an IRQ
+	 * (clock domain related), since we busywait for START/STOP
+	 * clear, add a small delay */
+	udelay(5);
 
 	spin_lock_irqsave(&drv_data->lock, flags);
 
@@ -579,6 +612,7 @@ mv64xxx_i2c_execute_msg(struct mv64xxx_i2c_data *drv_data, struct i2c_msg *msg,
 
 	drv_data->send_stop = is_last;
 	drv_data->block = 1;
+
 	mv64xxx_i2c_send_start(drv_data);
 	spin_unlock_irqrestore(&drv_data->lock, flags);
 

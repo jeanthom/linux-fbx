@@ -2727,6 +2727,8 @@ static void quirk_hotplug_bridge(struct pci_dev *dev)
 }
 
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_HINT, 0x0020, quirk_hotplug_bridge);
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_PERICOM, PCI_DEVICE_ID_PI7C9X20303SL,
+			 quirk_hotplug_bridge);
 
 /*
  * This is a quirk for the Ricoh MMC controller found as a part of

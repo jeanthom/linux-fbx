@@ -65,6 +65,12 @@ struct machine_desc {
 	void			(*restart)(enum reboot_mode, const char *);
 };
 
+struct fdt_desc {
+	unsigned int	nr;
+	void		*fdt_start;
+	void		*fdt_end;
+};
+
 /*
  * Current machine - only accessible during boot.
  */
@@ -97,5 +103,20 @@ static const struct machine_desc __mach_desc_##_name	\
  __attribute__((__section__(".arch.info.init"))) = {	\
 	.nr		= ~0,				\
 	.name		= _namestr,
+
+#ifdef CONFIG_MACHTYPE_FDT
+#define FDT_DESC(_type)					\
+extern u8 __fdt_start_##_type;				\
+extern u8 __fdt_end_##_type;				\
+static const struct fdt_desc __fdt_desc_##_type		\
+__used							\
+__attribute__((__section__(".arch.fdt.init"))) = {	\
+	.nr		= MACH_TYPE_##_type,		\
+	.fdt_start	= &__fdt_start_##_type,		\
+	.fdt_end	= &__fdt_end_##_type,		\
+}
+#else
+#define FDT_DESC(_type)
+#endif
 
 #endif

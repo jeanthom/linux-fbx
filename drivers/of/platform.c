@@ -74,6 +74,13 @@ void of_device_make_bus_id(struct device *dev)
 	struct device_node *node = dev->of_node;
 	const __be32 *reg;
 	u64 addr;
+	const char *legacy_name = NULL;
+
+	if (of_property_read_string(node, "fbx,legacy-device-name",
+				    &legacy_name) == 0) {
+		dev_set_name(dev, "%s", legacy_name);
+		return ;
+	}
 
 	/* Construct the name, using parent nodes if necessary to ensure uniqueness */
 	while (node->parent) {

@@ -1,0 +1,10 @@
+config NET_VENDOR_WINTEGRA
+	bool
+
+config WINTEGRA_WINPATH3_ETH
+	tristate "Wintegra Winpath3 internal mac support"
+	depends on WINTEGRA_WINPATH3
+	select NET_VENDOR_WINTEGRA
+	select NET_CORE
+	select MII
+	select PHYLIB

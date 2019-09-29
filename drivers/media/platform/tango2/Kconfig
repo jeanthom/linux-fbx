@@ -1,0 +1,11 @@
+config DVB_TANGO2
+	tristate "Tango2 DVB adapter"
+	depends on ARCH_FBX5_B
+	select I2C
+	select I2C_ALGOBIT
+	select DVB_TDA1004X
+	select DVB_PLL
+
+config DVB_TANGO2_TESTBED
+	bool "extended testing and useful error codes"
+	depends on DVB_TANGO2

@@ -322,7 +322,7 @@ EXPORT_SYMBOL_GPL(blk_mq_free_request);
 
 inline void __blk_mq_end_request(struct request *rq, int error)
 {
-	blk_account_io_done(rq);
+	blk_account_io_done(rq, error);
 
 	if (rq->end_io) {
 		rq->end_io(rq, error);

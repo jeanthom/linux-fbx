@@ -123,4 +123,29 @@ config MACH_NETXBIG
 	  Say 'Y' here if you want your kernel to support the
 	  LaCie 2Big and 5Big Network v2
 
+config FBXGW_COMMON
+	bool
+
+config MACH_FBXGW2R
+	bool "Freebox FBXGW2R"
+	select FBXSERIAL
+	select FBXGW_COMMON
+
+config MACH_FBXGW1R
+	bool "Freebox FBXGW1R"
+	select FBXSERIAL
+	select FBXGW_COMMON
+
+if FBXGW_COMMON
+
+config FBXGW_COMMON_PARTS_WRITE_ALL
+	bool "make all mtd partitions writeable"
+
+config FBXGW_COMMON_NAND_SAFE_READ_TIMINGS
+	bool "use very conservative timings for nand read"
+
+config FBXGW_COMMON_NAND_SAFE_WRITE_TIMINGS
+	bool "use very conservative timings for nand write"
+endif
+
 endif

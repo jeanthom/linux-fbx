@@ -130,7 +130,12 @@ static int __init orion_nand_probe(struct platform_device *pdev)
 	nc->IO_ADDR_R = nc->IO_ADDR_W = io_base;
 	nc->cmd_ctrl = orion_nand_cmd_ctrl;
 	nc->read_buf = orion_nand_read_buf;
-	nc->ecc.mode = NAND_ECC_SOFT;
+	nc->ecc.mode = board->ecc;
+	if (board->ecc == NAND_ECC_SOFT_BCH) {
+		printk("orion_nand_probe: ECC is SOFT_BCH.\n");
+		nc->ecc.size = board->bch_ecc_size;
+		nc->ecc.bytes = board->bch_ecc_bytes;
+	}
 
 	if (board->chip_delay)
 		nc->chip_delay = board->chip_delay;

@@ -867,6 +867,7 @@ struct dst_entry *ip6_blackhole_route(struct net *net,
 int ip6_output(struct sock *sk, struct sk_buff *skb);
 int ip6_forward(struct sk_buff *skb);
 int ip6_input(struct sk_buff *skb);
+int ip6_input_finish(struct sock *sk, struct sk_buff *skb);
 int ip6_mc_input(struct sk_buff *skb);
 
 int __ip6_local_out(struct sk_buff *skb);
@@ -989,4 +990,19 @@ int ipv6_sock_mc_join(struct sock *sk, int ifindex,
 		      const struct in6_addr *addr);
 int ipv6_sock_mc_drop(struct sock *sk, int ifindex,
 		      const struct in6_addr *addr);
+
+/*
+ *     Functions provided by ipv6_ffn.c
+ */
+
+enum {
+	IPV6_FFN_FINISH_OUT,
+	IPV6_FFN_LOCAL_IN,
+};
+
+extern void ipv6_ffn_init(void);
+extern int ipv6_ffn_process(struct sk_buff *skb);
+extern void ipv6_ffn_add(struct sk_buff *skb, int when);
+extern void ipv6_ffn_flush_all(void);
+
 #endif /* _NET_IPV6_H */

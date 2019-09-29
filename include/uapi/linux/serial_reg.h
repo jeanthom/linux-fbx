@@ -18,9 +18,18 @@
  * DLAB=0
  */
 #define UART_RX		0	/* In:  Receive buffer */
+#ifdef CONFIG_TANGO2
+#define UART_TX		1	/* Out: Transmit buffer */
+#else
 #define UART_TX		0	/* Out: Transmit buffer */
+#endif
 
+#ifdef CONFIG_TANGO2
+#define UART_IER	2	/* Out: Interrupt Enable Register */
+#else
 #define UART_IER	1	/* Out: Interrupt Enable Register */
+#endif
+
 #define UART_IER_MSI		0x08 /* Enable Modem status interrupt */
 #define UART_IER_RLSI		0x04 /* Enable receiver line status interrupt */
 #define UART_IER_THRI		0x02 /* Enable Transmitter holding register int. */
@@ -30,7 +39,12 @@
  */
 #define UART_IERX_SLEEP		0x10 /* Enable sleep mode */
 
+#ifdef CONFIG_TANGO2
+#define UART_IIR	3	/* In:  Interrupt ID Register */
+#else
 #define UART_IIR	2	/* In:  Interrupt ID Register */
+#endif
+
 #define UART_IIR_NO_INT		0x01 /* No interrupts pending */
 #define UART_IIR_ID		0x0e /* Mask for the interrupt ID */
 #define UART_IIR_MSI		0x00 /* Modem status interrupt */
@@ -44,7 +58,12 @@
 #define UART_IIR_XOFF		0x10 /* OMAP XOFF/Special Character */
 #define UART_IIR_CTS_RTS_DSR	0x20 /* OMAP CTS/RTS/DSR Change */
 
+#ifdef CONFIG_TANGO2
+#define UART_FCR	4	/* Out: FIFO Control Register */
+#else
 #define UART_FCR	2	/* Out: FIFO Control Register */
+#endif
+
 #define UART_FCR_ENABLE_FIFO	0x01 /* Enable the FIFO */
 #define UART_FCR_CLEAR_RCVR	0x02 /* Clear the RCVR FIFO */
 #define UART_FCR_CLEAR_XMIT	0x04 /* Clear the XMIT FIFO */
@@ -94,7 +113,12 @@
 	(((x) & UART_FCR_TRIGGER_MASK) >> UART_FCR_R_TRIG_SHIFT)
 #define UART_FCR_R_TRIG_MAX_STATE	4
 
+#ifdef CONFIG_TANGO2
+#define UART_LCR	5	/* Out: Line Control Register */
+#else
 #define UART_LCR	3	/* Out: Line Control Register */
+#endif
+
 /*
  * Note: if the word length is 5 bits (UART_LCR_WLEN5), then setting 
  * UART_LCR_STOP will select 1.5 stop bits, not 2 stop bits.
@@ -117,7 +141,11 @@
 #define UART_LCR_CONF_MODE_A	UART_LCR_DLAB	/* Configutation mode A */
 #define UART_LCR_CONF_MODE_B	0xBF		/* Configutation mode B */
 
+#ifdef CONFIG_TANGO2
+#define UART_MCR	6	/* Out: Modem Control Register */
+#else
 #define UART_MCR	4	/* Out: Modem Control Register */
+#endif
 #define UART_MCR_CLKSEL		0x80 /* Divide clock by 4 (TI16C752, EFR[4]=1) */
 #define UART_MCR_TCRTLR		0x40 /* Access TCR/TLR (TI16C752, EFR[4]=1) */
 #define UART_MCR_XONANY		0x20 /* Enable Xon Any (TI16C752, EFR[4]=1) */
@@ -128,8 +156,14 @@
 #define UART_MCR_RTS		0x02 /* RTS complement */
 #define UART_MCR_DTR		0x01 /* DTR complement */
 
+#ifdef CONFIG_TANGO2
+#define UART_LSR	7	/* In:  Line Status Register */
+#else
 #define UART_LSR	5	/* In:  Line Status Register */
+#endif
+
 #define UART_LSR_FIFOE		0x80 /* Fifo error */
+
 #define UART_LSR_TEMT		0x40 /* Transmitter empty */
 #define UART_LSR_THRE		0x20 /* Transmit-hold-register empty */
 #define UART_LSR_BI		0x10 /* Break interrupt indicator */
@@ -139,7 +173,11 @@
 #define UART_LSR_DR		0x01 /* Receiver data ready */
 #define UART_LSR_BRK_ERROR_BITS	0x1E /* BI, FE, PE, OE bits */
 
+#ifdef CONFIG_TANGO2
+#define UART_MSR	8	/* In:  Modem Status Register */
+#else
 #define UART_MSR	6	/* In:  Modem Status Register */
+#endif
 #define UART_MSR_DCD		0x80 /* Data Carrier Detect */
 #define UART_MSR_RI		0x40 /* Ring Indicator */
 #define UART_MSR_DSR		0x20 /* Data Set Ready */
@@ -150,18 +188,37 @@
 #define UART_MSR_DCTS		0x01 /* Delta CTS */
 #define UART_MSR_ANY_DELTA	0x0F /* Any of the delta bits! */
 
+#ifdef CONFIG_TANGO2
+#define UART_SCR	9	/* I/O: Scratch Register */
+#else
 #define UART_SCR	7	/* I/O: Scratch Register */
+#endif
 
 /*
  * DLAB=1
  */
+#ifdef CONFIG_TANGO2
+/*
+ * smp863x has DLM and DLM in one register
+ */
+#define UART_DL		10
+#define UART_CLKSEL     11      /* Clock selection */
+#else
 #define UART_DLL	0	/* Out: Divisor Latch Low */
 #define UART_DLM	1	/* Out: Divisor Latch High */
+#endif
 
 /*
  * LCR=0xBF (or DLAB=1 for 16C660)
  */
+#ifdef CONFIG_TANGO2
+/* EFR does not exist on TANGO2, we use a magic to catch accesses and
+ * make them nop */
+#define UART_EFR	42
+#else
 #define UART_EFR	2	/* I/O: Extended Features Register */
+#endif
+
 #define UART_XR_EFR	9	/* I/O: Extended Features Register (XR17D15x) */
 #define UART_EFR_CTS		0x80 /* CTS flow control */
 #define UART_EFR_RTS		0x40 /* RTS flow control */

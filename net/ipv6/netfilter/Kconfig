@@ -5,6 +5,13 @@
 menu "IPv6: Netfilter Configuration"
 	depends on INET && IPV6 && NETFILTER
 
+config IPV6_FFN
+	bool "IPv6: Fast forwarding and NAT"
+
+config IPV6_FFN_PROCFS
+	bool "IPv6: Fast forwarding and NAT /proc/net entries"
+	depends on IPV6_FFN
+
 config NF_DEFRAG_IPV6
 	tristate
 	default n

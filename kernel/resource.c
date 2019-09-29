@@ -358,15 +358,14 @@ static int find_next_iomem_res(struct resource *res, char *name,
 	read_lock(&resource_lock);
 
 	for (p = iomem_resource.child; p; p = next_resource(p, sibling_only)) {
-		if (p->flags != res->flags)
-			continue;
-		if (name && strcmp(p->name, name))
-			continue;
 		if (p->start > end) {
 			p = NULL;
 			break;
 		}
-		if ((p->end >= start) && (p->start < end))
+		if (p->flags != res->flags)
+			continue;
+		if ((p->end >= start) && (p->start < end) &&
+		    (name == NULL || !strcmp(p->name, name)))
 			break;
 	}
 

@@ -209,7 +209,9 @@ dtb-$(CONFIG_MACH_KIRKWOOD) += \
 	kirkwood-ts219-6281.dtb \
 	kirkwood-ts219-6282.dtb \
 	kirkwood-ts419-6281.dtb \
-	kirkwood-ts419-6282.dtb
+	kirkwood-ts419-6282.dtb \
+	fbxgw1r.dtb \
+	fbxgw2r.dtb
 dtb-$(CONFIG_ARCH_LPC18XX) += \
 	lpc4350-hitex-eval.dtb \
 	lpc4357-ea4357-devkit.dtb
