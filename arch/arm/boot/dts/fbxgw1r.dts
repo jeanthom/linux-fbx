@@ -8,7 +8,7 @@
 	compatible = "freebox,fbxgw1r";
 
 	chosen {
-		stdout-path = &uart1;
+		stdout-path = &uart0;
 	};
 
 	memory {
@@ -45,7 +45,7 @@
 
 &pmx_uart0 {
 	/* only mpp11 here (uart rx) as mpp10 is used as a gpio */
-	marvell,pins = "mpp11";
+	marvell,pins = "mpp11", "mpp10";
 	marvell,function = "uart0";
 };
 
