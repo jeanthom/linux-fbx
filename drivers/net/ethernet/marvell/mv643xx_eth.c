@@ -5182,9 +5182,9 @@ static int mii_bus_init(struct net_device *dev,
 
 
 
-	mp->mii_bus = mdio_find_bus("f1072004.mdio-bu");
+	mp->mii_bus = mdio_find_bus("f1072004.mdio-bus-mii");
 	if (!mp->mii_bus) {
-		dev_err(&pdev->dev, "unable to find mdio bus f1072004.mdio-bu");
+		dev_err(&pdev->dev, "unable to find mdio bus f1072004.mdio-bus-mii");
 		return -ENODEV;
 	}
 
